@@ -33,6 +33,7 @@ const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
 const LockManager = @import("LockManager.zig");
+const NavigatorExtras = @import("NavigatorExtras.zig");
 const Persona = @import("../../Persona.zig");
 
 const Execution = js.Execution;
@@ -58,6 +59,14 @@ _ua_data: NavigatorUAData = .{},
 _service_worker: ?*ServiceWorkerContainer = null,
 _locks: ?*LockManager = null,
 _beacon_bytes: ?*usize = null,
+_connection: ?*NavigatorExtras.NetworkInformation = null,
+_media_devices: ?*NavigatorExtras.MediaDevices = null,
+_battery: ?*NavigatorExtras.BatteryManager = null,
+_stubs: NavigatorExtras.StubCache = @splat(null),
+// SellGravity antidetect: PDF Plugin / MimeType objects, created on first
+// access so navigator.plugins[0] === navigator.plugins[0].
+_pdf_plugins: [PluginArray.plugin_names.len]?*PluginArray.Plugin = @splat(null),
+_pdf_mimes: [MimeTypeArray.mime_types.len]?*MimeTypeArray.MimeType = @splat(null),
 
 pub const init: Navigator = .{};
 
@@ -221,12 +230,59 @@ fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
 
+// SellGravity antidetect: desktop Chrome has a PDF viewer, Android does not.
+fn getPdfViewerEnabled(_: *const Navigator) bool {
+    return PluginArray.exposed();
+}
+
 fn getMimeTypes(self: *Navigator) *MimeTypeArray {
     return &self._mime_types;
 }
 
 fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
+}
+
+fn getConnection(self: *Navigator, exec: *Execution) !*NavigatorExtras.NetworkInformation {
+    if (self._connection) |c| return c;
+    const c = try NavigatorExtras.NetworkInformation.init(exec);
+    self._connection = c;
+    return c;
+}
+
+fn getMediaDevices(self: *Navigator, exec: *Execution) !*NavigatorExtras.MediaDevices {
+    if (self._media_devices) |m| return m;
+    const m = try NavigatorExtras.MediaDevices.init(exec);
+    self._media_devices = m;
+    return m;
+}
+
+fn getBattery(self: *Navigator, exec: *Execution) !js.Promise {
+    if (self._battery == null) {
+        self._battery = try NavigatorExtras.BatteryManager.init(exec);
+    }
+    return exec.js.local.?.resolvePromise(self._battery.?);
+}
+
+// SellGravity antidetect: Chrome's remaining Navigator methods. Nothing here
+// can reach hardware; each answers like Chrome without a user grant.
+fn getGamepads(_: *const Navigator) [4]?bool {
+    return .{ null, null, null, null };
+}
+fn vibrate(_: *const Navigator, _: ?js.Value) bool {
+    return false; // no user activation yet
+}
+fn canShare(_: *const Navigator, _: ?js.Value) bool {
+    return false;
+}
+fn rejectNotAllowed(_: *const Navigator, _: ?js.Value, _: ?js.Value, exec: *Execution) !js.Promise {
+    return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotAllowedError } });
+}
+fn resolveEmptyList(_: *const Navigator, exec: *Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise([0]bool{});
+}
+fn resolveUndefined(_: *const Navigator, _: ?js.Value, exec: *Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise({});
 }
 
 fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
@@ -375,8 +431,46 @@ pub const JsApi = struct {
     pub const locks = bridge.accessor(Navigator.getLocks, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
+    pub const pdfViewerEnabled = bridge.accessor(Navigator.getPdfViewerEnabled, null, .{});
     pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{});
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});
+    pub const connection = bridge.accessor(Navigator.getConnection, null, .{});
+    pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{});
+    pub const getBattery = bridge.function(Navigator.getBattery, .{});
+    pub const getGamepads = bridge.function(Navigator.getGamepads, .{});
+    pub const vibrate = bridge.function(Navigator.vibrate, .{});
+    pub const canShare = bridge.function(Navigator.canShare, .{});
+    pub const share = bridge.function(Navigator.rejectNotAllowed, .{});
+    pub const requestMIDIAccess = bridge.function(Navigator.rejectNotAllowed, .{});
+    pub const requestMediaKeySystemAccess = bridge.function(Navigator.rejectNotAllowed, .{});
+    pub const getInstalledRelatedApps = bridge.function(Navigator.resolveEmptyList, .{});
+    pub const setAppBadge = bridge.function(Navigator.resolveUndefined, .{});
+    pub const clearAppBadge = bridge.function(Navigator.resolveUndefined, .{});
+    pub const webkitGetUserMedia = bridge.function(Navigator.vibrate, .{ .noop = true });
+    pub const getUserMedia = bridge.function(Navigator.vibrate, .{ .noop = true });
+    pub const clipboard = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 0), null, .{});
+    pub const credentials = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 1), null, .{});
+    pub const keyboard = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 2), null, .{});
+    pub const mediaSession = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 3), null, .{});
+    pub const wakeLock = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 4), null, .{});
+    pub const usb = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 5), null, .{});
+    pub const hid = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 6), null, .{});
+    pub const serial = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 7), null, .{});
+    pub const bluetooth = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 8), null, .{});
+    pub const gpu = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 9), null, .{});
+    pub const scheduling = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 10), null, .{});
+    pub const ink = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 11), null, .{});
+    pub const presentation = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 12), null, .{});
+    pub const userActivation = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 13), null, .{});
+    pub const windowControlsOverlay = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 14), null, .{});
+    pub const xr = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 15), null, .{});
+    pub const mediaCapabilities = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 16), null, .{});
+    pub const virtualKeyboard = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 17), null, .{});
+    pub const storageBuckets = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 18), null, .{});
+    pub const devicePosture = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 19), null, .{});
+    pub const login = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 20), null, .{});
+    pub const managed = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 21), null, .{});
+    pub const protectedAudience = bridge.accessor(NavigatorExtras.stubGetter(Navigator, 22), null, .{});
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{});
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{});

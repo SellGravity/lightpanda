@@ -841,6 +841,12 @@ pub const JsApi = struct {
     pub const timeOrigin = bridge.accessor(Performance.getTimeOrigin, null, .{});
     pub const timing = bridge.accessor(Performance.getTiming, null, .{ .exposed = .window });
     pub const navigation = bridge.accessor(Performance.getNavigation, null, .{ .exposed = .window });
+    // SellGravity antidetect: Chrome-only performance.memory.
+    pub const memory = bridge.accessor(struct {
+        fn get(_: *const Performance, exec: *const Execution) !*@import("NavigatorExtras.zig").MemoryInfo {
+            return @import("NavigatorExtras.zig").memoryInfo(exec);
+        }
+    }.get, null, .{ .exposed = .window });
     pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{ .exposed = .window });
     pub const onresourcetimingbufferfull = EventTarget.handlerAccessor(Performance, "resourcetimingbufferfull");
 };

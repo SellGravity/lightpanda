@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
@@ -50,7 +51,15 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer arena.release();
 
-    const state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
+    var state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
+    // SellGravity antidetect: reflect --location-mode like the Chromium fork.
+    if (lp.Persona.active and std.mem.eql(u8, qd.name, "geolocation")) {
+        switch (lp.Persona.get().location_mode) {
+            .allow => state = .granted,
+            .block => state = .denied,
+            .ask, .default => {},
+        }
+    }
     const status = try exec._factory.eventTargetWithAllocator(arena.allocator(), PermissionStatus{
         ._arena = arena,
         ._proto = undefined,

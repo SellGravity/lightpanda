@@ -28,6 +28,7 @@ const EventManager = @import("../EventManager.zig");
 const Node = @import("Node.zig");
 const Event = @import("Event.zig");
 const Screen = @import("Screen.zig");
+const NavigatorExtras = @import("NavigatorExtras.zig");
 const Worker = @import("Worker.zig");
 const Window = @import("Window.zig");
 const FileReader = @import("FileReader.zig");
@@ -90,6 +91,7 @@ pub const Type = enum(u8) {
     audio_encoder,
     audio_node,
     base_audio_context,
+    battery_manager,
     broadcast_channel,
     cookie_store,
     event_source,
@@ -99,11 +101,13 @@ pub const Type = enum(u8) {
     idb_database,
     idb_request,
     idb_transaction,
+    media_devices,
     media_query_list,
     message_port,
     model_context,
     navigation,
     navigation_history_entry,
+    network_information,
     node,
     notification,
     payment_request,
@@ -139,6 +143,7 @@ pub fn Subtype(comptime tag: Type) type {
         .audio_encoder => AudioEncoder,
         .audio_node => AudioNode,
         .base_audio_context => BaseAudioContext,
+        .battery_manager => NavigatorExtras.BatteryManager,
         .broadcast_channel => BroadcastChannel,
         .cookie_store => CookieStore,
         .event_source => EventSource,
@@ -148,11 +153,13 @@ pub fn Subtype(comptime tag: Type) type {
         .idb_database => IDBDatabase,
         .idb_request => IDBRequest,
         .idb_transaction => IDBTransaction,
+        .media_devices => NavigatorExtras.MediaDevices,
         .media_query_list => MediaQueryList,
         .message_port => MessagePort,
         .model_context => ModelContext,
         .navigation => Navigation,
         .navigation_history_entry => NavigationHistoryEntry,
+        .network_information => NavigatorExtras.NetworkInformation,
         .node => Node,
         .notification => Notification,
         .payment_request => PaymentRequest,
@@ -420,6 +427,9 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .text_track_list => writer.writeAll("<TextTrackList>"),
         .navigation => writer.writeAll("<Navigation>"),
         .screen => writer.writeAll("<Screen>"),
+        .battery_manager => writer.writeAll("<BatteryManager>"),
+        .media_devices => writer.writeAll("<MediaDevices>"),
+        .network_information => writer.writeAll("<NetworkInformation>"),
         .screen_orientation => writer.writeAll("<ScreenOrientation>"),
         .visual_viewport => writer.writeAll("<VisualViewport>"),
         .file_reader => writer.writeAll("<FileReader>"),
@@ -467,6 +477,9 @@ pub fn toString(self: *EventTarget) []const u8 {
         .performance => return "[object Performance]",
         .permission_status => return "[object PermissionStatus]",
         .screen => return "[object Screen]",
+        .battery_manager => return "[object BatteryManager]",
+        .media_devices => return "[object MediaDevices]",
+        .network_information => return "[object NetworkInformation]",
         .screen_orientation => return "[object ScreenOrientation]",
         .service_worker => return "[object ServiceWorker]",
         .service_worker_container => return "[object ServiceWorkerContainer]",

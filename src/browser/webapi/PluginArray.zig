@@ -16,9 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const GenericIterator = @import("collections/iterator.zig").Entry;
+const Persona = @import("../../Persona.zig");
+const MimeTypeArray = @import("MimeTypeArray.zig");
 
 pub fn registerTypes() []const type {
     return &.{ PluginArray, Plugin, ValueIterator };
@@ -26,43 +30,111 @@ pub fn registerTypes() []const type {
 
 const PluginArray = @This();
 
+/// SellGravity antidetect: what desktop Chrome (>= 94) exposes. Every entry
+/// is the built-in PDF viewer under a different name, each handling the same
+/// two MIME types. Chrome for Android exposes none.
+pub const plugin_names = [_][]const u8{
+    "PDF Viewer",
+    "Chrome PDF Viewer",
+    "Chromium PDF Viewer",
+    "Microsoft Edge PDF Viewer",
+    "WebKit built-in PDF",
+};
+
+// Created objects are cached on the Navigator (_pdf_plugins) so this struct stays one
+// byte and never sits at the Navigator's offset 0 (JS identity map).
 _pad: bool = false,
 
+/// Whether this persona exposes the PDF plugins (desktop Chrome only).
+pub fn exposed() bool {
+    return Persona.active and !Persona.get().mobile and Persona.get().chrome_major > 0;
+}
+
+fn count() u32 {
+    return if (exposed()) plugin_names.len else 0;
+}
+
 pub fn refresh(_: *const PluginArray) void {}
-pub fn getAtIndex(_: *const PluginArray, index: usize) ?*Plugin {
-    _ = index;
+
+pub fn getAtIndex(_: *const PluginArray, index: usize, frame: *Frame) !?*Plugin {
+    if (index >= count()) return null;
+    const cache = &frame.window._navigator._pdf_plugins;
+    if (cache[index]) |p| return p;
+    const p = try frame._factory.create(Plugin{ ._index = @intCast(index) });
+    cache[index] = p;
+    return p;
+}
+
+pub fn getByName(self: *const PluginArray, name: []const u8, frame: *Frame) !?*Plugin {
+    if (!exposed()) return null;
+    for (plugin_names, 0..) |n, i| {
+        if (std.mem.eql(u8, n, name)) return self.getAtIndex(i, frame);
+    }
     return null;
 }
 
-pub fn getByName(_: *const PluginArray, name: []const u8) ?*Plugin {
-    _ = name;
-    return null;
+fn getLength(_: *const PluginArray) u32 {
+    return count();
 }
 
-// Cannot be constructed, and we currently never return any, so no reason to
-// implement anything on it (for now)
-const Plugin = struct {
-    _pad: bool = false,
+pub const Plugin = struct {
+    _index: u8 = 0,
+
+    fn getName(self: *const Plugin) []const u8 {
+        return plugin_names[self._index];
+    }
+    fn getFilename(_: *const Plugin) []const u8 {
+        return "internal-pdf-viewer";
+    }
+    fn getDescription(_: *const Plugin) []const u8 {
+        return "Portable Document Format";
+    }
+    fn getLength(_: *const Plugin) u32 {
+        return MimeTypeArray.mime_types.len;
+    }
+    /// The plugin's MIME types are the navigator.mimeTypes objects.
+    fn item(_: *const Plugin, index: usize, frame: *Frame) !?*MimeTypeArray.MimeType {
+        return frame.window._navigator._mime_types.getAtIndex(index, frame);
+    }
+    fn namedItem(_: *const Plugin, name: []const u8, frame: *Frame) !?*MimeTypeArray.MimeType {
+        return frame.window._navigator._mime_types.getByName(name, frame);
+    }
 
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Plugin);
         pub const Meta = struct {
             pub const name = "Plugin";
             pub var class_id: bridge.ClassId = undefined;
-            pub const empty_with_no_proto = true;
         };
+        pub const name = bridge.accessor(Plugin.getName, null, .{});
+        pub const filename = bridge.accessor(Plugin.getFilename, null, .{});
+        pub const description = bridge.accessor(Plugin.getDescription, null, .{});
+        pub const length = bridge.accessor(Plugin.getLength, null, .{});
+        pub const @"[int]" = bridge.indexed(Plugin.item, null, .{ .null_as_undefined = true });
+        pub const item = bridge.function(struct {
+            fn wrap(self: *const Plugin, index: i32, frame: *Frame) !?*MimeTypeArray.MimeType {
+                if (index < 0) return null;
+                return self.item(@intCast(index), frame);
+            }
+        }.wrap, .{});
+        pub const namedItem = bridge.function(Plugin.namedItem, .{});
     };
 };
 
-fn values(_: *const PluginArray, frame: *Frame) !*ValueIterator {
-    return .init(.{}, frame);
+fn values(self: *const PluginArray, frame: *Frame) !*ValueIterator {
+    return .init(.{ .array = self }, frame);
 }
 
 const ValueIterator = GenericIterator(Iterator, null);
 
 const Iterator = struct {
-    pub fn next(_: *Iterator, _: *Frame) ?*Plugin {
-        return null;
+    array: *const PluginArray,
+    index: usize = 0,
+
+    pub fn next(self: *Iterator, frame: *Frame) !?*Plugin {
+        const p = try self.array.getAtIndex(self.index, frame);
+        if (p != null) self.index += 1;
+        return p;
     }
 };
 
@@ -75,22 +147,21 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const length = bridge.property(0, .{ .template = false });
+    pub const length = bridge.accessor(PluginArray.getLength, null, .{});
     pub const refresh = bridge.function(PluginArray.refresh, .{});
     pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, null, struct {
         fn wrap(_: *const PluginArray, _: []const u8) !u32 {
-            // No plugin is ever exposed, so there are no named properties.
             return error.NotHandled;
         }
     }.wrap, .{ .null_as_undefined = true });
 
     pub const item = bridge.function(struct {
-        fn wrap(self: *const PluginArray, index: i32) ?*Plugin {
+        fn wrap(self: *const PluginArray, index: i32, frame: *Frame) !?*Plugin {
             if (index < 0) {
                 return null;
             }
-            return self.getAtIndex(@intCast(index));
+            return self.getAtIndex(@intCast(index), frame);
         }
     }.wrap, .{});
 

@@ -43,6 +43,7 @@ const std = @import("std");
 
 const Viewport = @import("../Viewport.zig");
 const Tokenizer = @import("Tokenizer.zig");
+const Persona = @import("../../Persona.zig");
 
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.
@@ -299,7 +300,7 @@ fn evalFeature(text: []const u8, viewport: Viewport) bool {
     return evalBoolean(trimmed, viewport);
 }
 
-const max_feature_name_len = 17;
+const max_feature_name_len = 32;
 
 /// Map the deprecated `device-*` features onto their viewport counterparts.
 /// `device-width` is the width of the output device; we have no separate
@@ -321,6 +322,9 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
     }
 
     var buf: [max_feature_name_len]u8 = undefined;
+    if (Persona.active) {
+        if (personaFeature(std.ascii.lowerString(&buf, name), value, viewport)) |r| return r;
+    }
     const lname = stripDevice(std.ascii.lowerString(&buf, name));
     const width: f64 = @floatFromInt(viewport.width);
     const height: f64 = @floatFromInt(viewport.height);
@@ -361,12 +365,121 @@ fn evalBoolean(name: []const u8, viewport: Viewport) bool {
         return false;
     }
     var buf: [max_feature_name_len]u8 = undefined;
+    if (Persona.active) {
+        if (personaFeature(std.ascii.lowerString(&buf, name), null, viewport)) |r| return r;
+    }
     const lname = stripDevice(std.ascii.lowerString(&buf, name));
 
     if (std.mem.eql(u8, lname, "width")) return viewport.width > 0;
     if (std.mem.eql(u8, lname, "height")) return viewport.height > 0;
     if (std.mem.eql(u8, lname, "orientation")) return true;
     return false;
+}
+
+// SellGravity antidetect: the media features a real Chrome on the persona's
+// device answers. Returns null for anything handled by the upstream code.
+fn personaFeature(lname: []const u8, value: ?[]const u8, viewport: Viewport) ?bool {
+    const p = Persona.get();
+    const eq = std.mem.eql;
+    const is = struct {
+        fn f(v: ?[]const u8, want: []const u8) bool {
+            return v != null and std.ascii.eqlIgnoreCase(v.?, want);
+        }
+    }.f;
+
+    if (eq(u8, lname, "pointer") or eq(u8, lname, "any-pointer")) {
+        if (value == null) return true;
+        return is(value, if (p.mobile) "coarse" else "fine");
+    }
+    if (eq(u8, lname, "hover") or eq(u8, lname, "any-hover")) {
+        if (value == null) return !p.mobile;
+        return is(value, if (p.mobile) "none" else "hover");
+    }
+    if (eq(u8, lname, "color-gamut")) {
+        if (is(value, "srgb")) return true;
+        if (is(value, "p3")) return p.os == .macos or p.os == .ios;
+        return false;
+    }
+    if (eq(u8, lname, "color")) {
+        if (value == null) return true;
+        const bits = std.fmt.parseInt(u32, value.?, 10) catch return false;
+        return bits == 8;
+    }
+    if (eq(u8, lname, "min-color")) {
+        const bits = std.fmt.parseInt(u32, value orelse return false, 10) catch return false;
+        return bits <= 8;
+    }
+    if (eq(u8, lname, "max-color")) {
+        const bits = std.fmt.parseInt(u32, value orelse return false, 10) catch return false;
+        return bits >= 8;
+    }
+    if (eq(u8, lname, "monochrome") or eq(u8, lname, "color-index")) {
+        if (value == null) return false;
+        return is(value, "0");
+    }
+    if (eq(u8, lname, "prefers-color-scheme")) return is(value, "light");
+    if (eq(u8, lname, "prefers-reduced-motion")) return value == null or is(value, "no-preference");
+    if (eq(u8, lname, "prefers-reduced-transparency")) return value == null or is(value, "no-preference");
+    if (eq(u8, lname, "prefers-contrast")) return value == null or is(value, "no-preference");
+    if (eq(u8, lname, "forced-colors")) return value == null or is(value, "none");
+    if (eq(u8, lname, "inverted-colors")) return value == null or is(value, "none");
+    if (eq(u8, lname, "dynamic-range") or eq(u8, lname, "video-dynamic-range")) return is(value, "standard");
+    if (eq(u8, lname, "display-mode")) return is(value, "browser");
+    if (eq(u8, lname, "scripting")) return is(value, "enabled");
+    if (eq(u8, lname, "update")) return value == null or is(value, "fast");
+    if (eq(u8, lname, "overflow-block")) return is(value, "scroll");
+    if (eq(u8, lname, "overflow-inline")) return is(value, "scroll");
+
+    // device-* is the screen, not the viewport.
+    const sw: f64 = @floatFromInt(p.screen_width orelse viewport.screen_width orelse viewport.width);
+    const sh: f64 = @floatFromInt(p.screen_height orelse viewport.screen_height orelse viewport.height);
+    const device = [_]struct { []const u8, f64, i2 }{
+        .{ "device-width", sw, 0 },  .{ "min-device-width", sw, 1 },  .{ "max-device-width", sw, -1 },
+        .{ "device-height", sh, 0 }, .{ "min-device-height", sh, 1 }, .{ "max-device-height", sh, -1 },
+    };
+    for (device) |d| {
+        if (eq(u8, lname, d[0])) {
+            if (value == null) return true;
+            const px = parseLengthPx(value.?) orelse return false;
+            return switch (d[2]) {
+                0 => d[1] == px,
+                1 => d[1] >= px,
+                else => d[1] <= px,
+            };
+        }
+    }
+
+    // Device pixel ratio, in its three spellings.
+    const dpr: f64 = viewport.scale;
+    const ratio = [_]struct { []const u8, i2 }{
+        .{ "-webkit-device-pixel-ratio", 0 }, .{ "-webkit-min-device-pixel-ratio", 1 }, .{ "-webkit-max-device-pixel-ratio", -1 },
+        .{ "resolution", 0 },                 .{ "min-resolution", 1 },                 .{ "max-resolution", -1 },
+    };
+    for (ratio) |r| {
+        if (eq(u8, lname, r[0])) {
+            if (value == null) return true;
+            const want = parseResolution(value.?) orelse return false;
+            return switch (r[1]) {
+                0 => @abs(dpr - want) < 0.001,
+                1 => dpr >= want - 0.001,
+                else => dpr <= want + 0.001,
+            };
+        }
+    }
+    return null;
+}
+
+/// `2`, `2dppx`, `2x`, `192dpi`, `75.6dpcm` -> device pixels per CSS px.
+fn parseResolution(value: []const u8) ?f64 {
+    const v = std.mem.trim(u8, value, &std.ascii.whitespace);
+    const units = [_]struct { []const u8, f64 }{ .{ "dppx", 1 }, .{ "dpcm", 2.54 / 96.0 }, .{ "dpi", 1.0 / 96.0 }, .{ "x", 1 } };
+    for (units) |u| {
+        if (std.ascii.endsWithIgnoreCase(v, u[0])) {
+            const n = std.fmt.parseFloat(f64, v[0 .. v.len - u[0].len]) catch return null;
+            return n * u[1];
+        }
+    }
+    return std.fmt.parseFloat(f64, v) catch null;
 }
 
 /// Parse `<number>px`, `<number>em` (1em=16px), `<number>rem`, or bare `0`:

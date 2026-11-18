@@ -2,6 +2,13 @@
   const N = Navigator.prototype;
   delete N.globalPrivacyControl;
   delete N.modelContext;
+  // Chrome for Android has no desktop-only hardware / window APIs.
+  if (navigator.userAgentData && navigator.userAgentData.mobile) {
+    for (const k of ['hid', 'serial', 'keyboard', 'windowControlsOverlay', 'ink', 'managed', 'getInstalledRelatedApps', 'setAppBadge', 'clearAppBadge']) delete N[k];
+  } else {
+    // devicePosture only ships on foldable-capable (Android) builds.
+    delete N.devicePosture;
+  }
   if (typeof window === 'undefined' || 'chrome' in window) return;
   const native = (fn, name, len) => {
     const b = fn.bind(null);
