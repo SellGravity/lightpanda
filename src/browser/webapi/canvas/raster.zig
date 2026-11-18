@@ -69,6 +69,7 @@ pub const op_clear_path: u32 = 2;
 pub const op_fill_text: u32 = 3;
 pub const op_stroke_text: u32 = 4;
 pub const op_put_image: u32 = 5;
+pub const op_draw_image: u32 = 6;
 
 const verb_move: f32 = 0;
 const verb_line: f32 = 1;
@@ -82,6 +83,7 @@ pub const text_serif: u32 = 4;
 pub const text_mono: u32 = 8;
 
 extern "c" fn lp_canvas_render(r: ?*screenshot.Renderer, w: u32, h: u32, ops: [*]const Op, n: usize, out: [*]u8) i32;
+extern "c" fn lp_png_decode_rgba(data: [*]const u8, len: usize, w_out: *u32, h_out: *u32, out: ?[*]u8, out_cap: usize) i32;
 extern "c" fn lp_canvas_measure(r: *screenshot.Renderer, text: [*]const u8, len: usize, px: f32, flags: u32, out: *[3]f32) i32;
 extern "c" fn lp_png_encode_rgba(
     w: u32,
@@ -443,8 +445,8 @@ pub const Recorder = struct {
             const m = paint.ctm;
             op.transform[0] = @floatCast(m[0] * k);
             op.transform[1] = @floatCast(m[1] * k);
-            op.transform[4] = @floatCast(m[0] * (x - k * x) + m[4]);
-            op.transform[5] = @floatCast(m[1] * (x - k * x) + m[5]);
+            op.transform[4] = @floatCast(m[0] * (x - k * x) + m[2] * r.shift + m[4]);
+            op.transform[5] = @floatCast(m[1] * (x - k * x) + m[3] * r.shift + m[5]);
         }
         op.rect = .{ @floatCast(x), @floatCast(y), if (max_width) |m| @floatCast(m) else 0, @floatCast(state.font_size) };
         try self.push(op);
@@ -458,6 +460,31 @@ pub const Recorder = struct {
         op.image_w = w;
         op.image_h = h;
         op.rect = .{ @floatCast(dx), @floatCast(dy), 0, 0 };
+        try self.push(op);
+    }
+
+    /// drawImage of straight-RGBA `src` (iw x ih): the source rect (sx, sy,
+    /// sw, sh) is cropped here, then scaled into (dx, dy, dw, dh) by Rust.
+    pub fn drawImage(self: *Recorder, paint: *const Paint, src: []const u8, iw: u32, ih: u32, sx: f64, sy: f64, sw: f64, sh: f64, dx: f64, dy: f64, dw: f64, dh: f64) !void {
+        if (!finite(&.{ sx, sy, sw, sh, dx, dy, dw, dh })) return;
+        if (iw == 0 or ih == 0 or sw == 0 or sh == 0 or dw == 0 or dh == 0) return;
+        const x0: u32 = @intFromFloat(std.math.clamp(@floor(@min(sx, sx + sw)), 0, @as(f64, @floatFromInt(iw))));
+        const y0: u32 = @intFromFloat(std.math.clamp(@floor(@min(sy, sy + sh)), 0, @as(f64, @floatFromInt(ih))));
+        const x1: u32 = @intFromFloat(std.math.clamp(@ceil(@max(sx, sx + sw)), 0, @as(f64, @floatFromInt(iw))));
+        const y1: u32 = @intFromFloat(std.math.clamp(@ceil(@max(sy, sy + sh)), 0, @as(f64, @floatFromInt(ih))));
+        if (x1 <= x0 or y1 <= y0) return;
+        const cw = x1 - x0;
+        const ch = y1 - y0;
+        const crop = try self.allocator.alloc(u8, @as(usize, cw) * ch * 4);
+        for (0..ch) |row| {
+            const s = ((y0 + row) * iw + x0) * 4;
+            @memcpy(crop[row * cw * 4 ..][0 .. cw * 4], src[s..][0 .. cw * 4]);
+        }
+        var op = baseOp(op_draw_image, paint);
+        op.image = crop.ptr;
+        op.image_w = cw;
+        op.image_h = ch;
+        op.rect = .{ @floatCast(dx), @floatCast(dy), @floatCast(dw), @floatCast(dh) };
         try self.push(op);
     }
 
@@ -481,7 +508,46 @@ pub const Recorder = struct {
             const rc = lp_canvas_render(renderer, w, h, self.ops.items.ptr, self.ops.items.len, out.ptr);
             if (rc != 0) @memset(out, 0);
         }
-        applyNoise(out);
+        // Pixels a page wrote itself with putImageData read back verbatim
+        // (CreepJS compares them to spot "rgba noise").
+        var skip: [16][4]i64 = undefined;
+        var skip_len: usize = 0;
+        for (self.ops.items) |op| {
+            if (skip_len == skip.len) break;
+            if (op.kind == op_put_image) {
+                const x0: i64 = @intFromFloat(@round(op.rect[0]));
+                const y0: i64 = @intFromFloat(@round(op.rect[1]));
+                skip[skip_len] = .{ x0, y0, x0 + op.image_w, y0 + op.image_h };
+                skip_len += 1;
+            } else if (op.kind == op_draw_image) {
+                // Drawn images already carry their noise (e.g. a canvas
+                // exported and drawn back): bounding box in device space.
+                const t = op.transform;
+                const xs = [_]f32{ op.rect[0], op.rect[0] + op.rect[2] };
+                const ys = [_]f32{ op.rect[1], op.rect[1] + op.rect[3] };
+                var min_x: f32 = std.math.floatMax(f32);
+                var min_y: f32 = std.math.floatMax(f32);
+                var max_x: f32 = -std.math.floatMax(f32);
+                var max_y: f32 = -std.math.floatMax(f32);
+                for (xs) |px| for (ys) |py| {
+                    const dx = t[0] * px + t[2] * py + t[4];
+                    const dy = t[1] * px + t[3] * py + t[5];
+                    min_x = @min(min_x, dx);
+                    min_y = @min(min_y, dy);
+                    max_x = @max(max_x, dx);
+                    max_y = @max(max_y, dy);
+                };
+                if (!std.math.isFinite(min_x) or !std.math.isFinite(max_y)) continue;
+                skip[skip_len] = .{
+                    @intFromFloat(@floor(std.math.clamp(min_x, -1e6, 1e6))),
+                    @intFromFloat(@floor(std.math.clamp(min_y, -1e6, 1e6))),
+                    @intFromFloat(@ceil(std.math.clamp(max_x, -1e6, 1e6))),
+                    @intFromFloat(@ceil(std.math.clamp(max_y, -1e6, 1e6))),
+                };
+                skip_len += 1;
+            }
+        }
+        applyNoise(out, w, skip[0..skip_len]);
         return out;
     }
 };
@@ -545,25 +611,50 @@ fn splitmix(x: u64) u64 {
     return z ^ (z >> 31);
 }
 
-/// --canvas-noise: nudge ~4% of the painted pixels by one level in one
+/// --canvas-noise: nudge ~4% of the painted edge pixels by one level in one
 /// channel, from the profile seed. Stable for a profile (same drawing, same
 /// hash), different across profiles; transparent pixels stay untouched so a
 /// blank canvas still reads as blank.
-pub fn applyNoise(rgba: []u8) void {
+pub fn applyNoise(rgba: []u8, width: u32, skip: []const [4]i64) void {
     const p = Persona.get();
     if (!Persona.active or !p.canvas_noise) return;
     const base = p.seed ^ Persona.salt_canvas;
     var i: usize = 0;
     while (i + 3 < rgba.len) : (i += 4) {
-        if (rgba[i + 3] == 0) continue;
+        // Opaque pixels only: a semi-transparent value nudged after
+        // demultiplying does not survive the premultiplied round trip
+        // (toDataURL -> Image -> drawImage -> getImageData must match).
+        if (rgba[i + 3] != 255) continue;
+        // Solid areas stay exact, borders between solid fills included (a
+        // filled rect reads back its exact color, which tamper checks such as
+        // pixelscan's colour-strip round trip verify). Only anti-aliased
+        // pixels - unlike every 4-neighbour, the ones that already vary
+        // across GPUs - carry the noise.
+        const stride: usize = @as(usize, width) * 4;
+        const col = (i >> 2) % width;
+        const px4 = rgba[i..][0..4];
+        if (col + 1 < width and i + 7 < rgba.len and std.mem.eql(u8, px4, rgba[i + 4 ..][0..4])) continue;
+        if (col > 0 and std.mem.eql(u8, px4, rgba[i - 4 ..][0..4])) continue;
+        if (i + stride + 3 < rgba.len and std.mem.eql(u8, px4, rgba[i + stride ..][0..4])) continue;
+        if (i >= stride and std.mem.eql(u8, px4, rgba[i - stride ..][0..4])) continue;
+        if (skip.len > 0) {
+            const px: i64 = @intCast((i >> 2) % width);
+            const py: i64 = @intCast((i >> 2) / width);
+            var inside = false;
+            for (skip) |r| {
+                if (px >= r[0] and px < r[2] and py >= r[1] and py < r[3]) {
+                    inside = true;
+                    break;
+                }
+            }
+            if (inside) continue;
+        }
         const h = splitmix(base ^ (i >> 2));
         if (h % 25 != 0) continue;
         const ch = i + @as(usize, @intCast((h >> 8) % 3));
-        if ((h >> 16) & 1 == 0) {
-            rgba[ch] = if (rgba[ch] == 255) 254 else rgba[ch] + 1;
-        } else {
-            rgba[ch] = if (rgba[ch] == 0) 1 else rgba[ch] - 1;
-        }
+        // Set the low bit from the seed instead of +-1: idempotent, so pixels
+        // exported and drawn back (or noised twice) read back identically.
+        rgba[ch] = (rgba[ch] & 0xFE) | @as(u8, @intCast((h >> 16) & 1));
     }
 }
 
@@ -629,4 +720,27 @@ test "raster: fontFlags" {
     try testing.expectEqual(text_bold | text_italic, fontFlags("italic bold 12px Arial"));
     try testing.expectEqual(text_mono, fontFlags("14px 'Courier New', monospace"));
     try testing.expectEqual(@as(u32, 0), fontFlags("10px sans-serif"));
+}
+
+pub const Decoded = struct {
+    rgba: []u8,
+    w: u32,
+    h: u32,
+};
+
+/// A `data:image/png;base64,...` URL decoded to straight RGBA, or null.
+pub fn decodePngDataUrl(allocator: Allocator, url: []const u8) ?Decoded {
+    const prefix = "data:image/png;base64,";
+    if (!std.ascii.startsWithIgnoreCase(url, prefix)) return null;
+    const b64 = url[prefix.len..];
+    const dec = std.base64.standard.Decoder;
+    const size = dec.calcSizeForSlice(b64) catch return null;
+    const bytes = allocator.alloc(u8, size) catch return null;
+    dec.decode(bytes, b64) catch return null;
+    var w: u32 = 0;
+    var h: u32 = 0;
+    if (lp_png_decode_rgba(bytes.ptr, bytes.len, &w, &h, null, 0) != 1) return null;
+    const out = allocator.alloc(u8, @as(usize, w) * h * 4) catch return null;
+    if (lp_png_decode_rgba(bytes.ptr, bytes.len, &w, &h, out.ptr, out.len) != 0) return null;
+    return .{ .rgba = out, .w = w, .h = h };
 }

@@ -25,6 +25,7 @@ const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
 const context2d = @import("context2d.zig");
 const raster = @import("raster.zig");
+const draw_image = @import("draw_image.zig");
 const TextMetrics = @import("TextMetrics.zig");
 const CanvasGradient = @import("CanvasGradient.zig");
 const CanvasPattern = @import("CanvasPattern.zig");
@@ -163,10 +164,13 @@ fn putImageData(self: *CanvasRenderingContext2D, img: *ImageData, dx: f64, dy: f
     try rec.putImage(data, img._width, img._height, dx, dy);
 }
 
-// CanvasImageSource (HTMLImageElement, HTMLCanvasElement, ImageBitmap, ...) is
-// just taken as a js.Value for now since we don't use it, and that's much easier.
-fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, exec: *const Execution) void {
+// drawImage(image, dx, dy[, dw, dh]) or (image, sx, sy, sw, sh, dx, dy, dw, dh).
+// Launcher profiles draw PNG data-URL images, canvases and offscreen canvases
+// (see draw_image.zig); other sources draw nothing.
+fn drawImage(self: *CanvasRenderingContext2D, source: draw_image.Source, a0: f64, a1: f64, a2: ?f64, a3: ?f64, a4: ?f64, a5: ?f64, a6: ?f64, a7: ?f64, exec: *const Execution) !void {
     painted(exec);
+    const rec = self.recorder(exec) orelse return;
+    try draw_image.record(rec, &self._paint, source, .{ a0, a1, a2, a3, a4, a5, a6, a7 }, exec);
 }
 
 fn getImageData(

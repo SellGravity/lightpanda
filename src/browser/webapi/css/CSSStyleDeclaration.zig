@@ -30,9 +30,11 @@ const DeclarationBlock = @import("../../css/DeclarationBlock.zig");
 const StyleManager = @import("../../StyleManager.zig");
 
 const Element = @import("../Element.zig");
+const RuleStore = @import("../../css/RuleStore.zig");
 const DOMMatrixReadOnly = @import("../DOMMatrixReadOnly.zig");
 
 const CSSStyleRule = @import("CSSStyleRule.zig");
+const chrome_computed = @import("chrome_computed.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -81,10 +83,19 @@ fn applyDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Declara
 }
 
 pub fn length(self: *const CSSStyleDeclaration) u32 {
+    if (personaComputed(self)) |list| return @intCast(list.len);
     return self.storage().length();
 }
 
+// SellGravity antidetect: a computed style enumerates every longhand Chrome
+// computes (the persona's release), as fingerprinters walk it by index.
+fn personaComputed(self: *const CSSStyleDeclaration) ?[]const []const u8 {
+    if (self._owner != .computed or !lp.Persona.active) return null;
+    return chrome_computed.names(lp.Persona.get().chrome_major);
+}
+
 pub fn item(self: *const CSSStyleDeclaration, index: u32, frame: *const Frame) []const u8 {
+    if (personaComputed(self)) |list| return if (index < list.len) list[index] else "";
     const all = self.storage().entries();
     if (index >= all.len) {
         return "";
@@ -1718,4 +1729,64 @@ test "normalizePropertyValue: anchor() canonical order" {
         const result = try normalizePropertyValue(testing.arena_allocator, @field(properties.Id, case[0]), case[1]);
         try testing.expectEqual(case[2], result);
     }
+}
+
+/// SellGravity antidetect: getComputedStyle(el, "::marker" | "::before" |
+/// "::after") reflects the stylesheet rules that target that pseudo-element
+/// (`li::marker { color: red }`), as fingerprinters probe ::marker support
+/// that way. Rules are applied in sheet order; specificity is not ranked.
+pub fn applyPseudoRules(self: *CSSStyleDeclaration, element: *Element, pseudo: []const u8, frame: *Frame) !void {
+    const name = if (std.mem.startsWith(u8, pseudo, "::")) pseudo[2..] else if (std.mem.startsWith(u8, pseudo, ":")) pseudo[1..] else return;
+    if (name.len == 0) return;
+    const sheets = try frame.document.getStyleSheets(frame);
+    var i: usize = 0;
+    while (i < sheets.length()) : (i += 1) {
+        const sheet = sheets.item(i) orelse continue;
+        if (sheet._disabled) continue;
+        sheet.ensureParsed(frame) catch continue;
+        try self.applyPseudoStore(&sheet._store, element, name, frame);
+    }
+}
+
+fn applyPseudoStore(self: *CSSStyleDeclaration, store: *const RuleStore, element: *Element, name: []const u8, frame: *Frame) !void {
+    for (store.entries()) |*entry| {
+        switch (entry._kind) {
+            .style => {
+                var parts = std.mem.splitScalar(u8, entry.text(), ',');
+                while (parts.next()) |raw| {
+                    const part = std.mem.trim(u8, raw, " \t\r\n");
+                    const base = pseudoBase(part, name) orelse continue;
+                    const matched = element.matches(if (base.len == 0) "*" else base, frame) catch false;
+                    if (!matched) continue;
+                    const allocator = frame.page.recycling;
+                    for (entry._block.entries()) |decl| {
+                        if (self.storage().find(decl._id)) |existing| {
+                            try existing.setValue(allocator, decl.value());
+                        } else {
+                            try self.storage().append(allocator, decl._id, decl.value(), decl._important);
+                        }
+                    }
+                    break;
+                }
+            },
+            .media, .supports, .layer => if (entry._children) |children| {
+                try self.applyPseudoStore(children, element, name, frame);
+            },
+            else => {},
+        }
+    }
+}
+
+/// `li::marker` -> `li` when `part` ends with the pseudo-element `name`.
+fn pseudoBase(part: []const u8, name: []const u8) ?[]const u8 {
+    if (part.len < name.len + 1) return null;
+    const tail = part[part.len - name.len ..];
+    if (!std.ascii.eqlIgnoreCase(tail, name)) return null;
+    var cut = part.len - name.len;
+    if (cut >= 2 and part[cut - 1] == ':' and part[cut - 2] == ':') {
+        cut -= 2;
+    } else if (cut >= 1 and part[cut - 1] == ':') {
+        cut -= 1;
+    } else return null;
+    return std.mem.trimEnd(u8, part[0..cut], " \t");
 }

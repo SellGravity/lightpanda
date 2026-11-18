@@ -22,6 +22,9 @@ const js = @import("../../js/js.zig");
 const Blob = @import("../Blob.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
+const raster = @import("raster.zig");
+const WebGLRenderingContext = @import("WebGLRenderingContext.zig");
+const lp = @import("lightpanda");
 
 const Execution = js.Execution;
 
@@ -38,6 +41,7 @@ _cached: ?DrawingContext = null,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
@@ -67,6 +71,7 @@ fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution
     if (self._cached) |cached| {
         return switch (cached) {
             .@"2d" => if (std.mem.eql(u8, context_type, "2d")) cached else null,
+            .webgl => if (Canvas.isWebGL(context_type)) cached else null,
         };
     }
 
@@ -76,6 +81,15 @@ fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution
         return self._cached;
     }
 
+    // SellGravity antidetect: OffscreenCanvas WebGL (workers included) with
+    // the persona's answers; scanners compare a worker's unmasked renderer
+    // with the window's.
+    if (Canvas.isWebGL(context_type) and lp.Persona.active) {
+        const version: u8 = if (std.mem.eql(u8, context_type, "webgl2")) 2 else 1;
+        const ctx = try WebGLRenderingContext.create(exec, self._width, self._height, version, null);
+        self._cached = .{ .webgl = ctx };
+        return self._cached;
+    }
     if (Canvas.isWebGL(context_type)) {
         exec.page.status.noteUnsupported(.webgl);
     }
@@ -87,6 +101,26 @@ fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution
 fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise {
     if (!BlankPNG.hasBitmap(self._width, self._height)) {
         return error.IndexSizeError;
+    }
+    // SellGravity antidetect: the same raster + noise as <canvas>, so an
+    // OffscreenCanvas drawing the same thing encodes the same PNG (BrowserScan
+    // compares the two to spot tampering).
+    if (@import("../../../Persona.zig").active and @as(u64, self._width) * self._height <= 4096 * 4096) {
+        const w = self._width;
+        const h = self._height;
+        var pixels: ?[]u8 = null;
+        if (self._cached) |cached| switch (cached) {
+            .@"2d" => |ctx| pixels = try ctx.renderPixels(exec.call_arena, exec, w, h),
+            .webgl => {},
+        };
+        const px = pixels orelse blk: {
+            const blank = try exec.call_arena.alloc(u8, @as(usize, w) * h * 4);
+            @memset(blank, 0);
+            break :blk blank;
+        };
+        const bytes = try raster.pngBytes(exec.call_arena, px, w, h);
+        const png_blob = try Blob.initFromBytes(bytes, "image/png", exec);
+        return exec.js.local.?.resolvePromise(png_blob);
     }
     const blob = try BlankPNG.blob(exec);
     return exec.js.local.?.resolvePromise(blob);

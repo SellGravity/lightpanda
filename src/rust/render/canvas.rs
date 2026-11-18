@@ -42,6 +42,7 @@ pub const OP_CLEAR_PATH: u32 = 2;
 pub const OP_FILL_TEXT: u32 = 3;
 pub const OP_STROKE_TEXT: u32 = 4;
 pub const OP_PUT_IMAGE: u32 = 5;
+pub const OP_DRAW_IMAGE: u32 = 6;
 
 pub const VERB_MOVE: f32 = 0.0;
 pub const VERB_LINE: f32 = 1.0;
@@ -451,6 +452,7 @@ pub unsafe extern "C" fn lp_canvas_render(
                     }
                 }
                 OP_PUT_IMAGE => put_image(&mut pixmap, op),
+                OP_DRAW_IMAGE => draw_image(&mut pixmap, op),
                 _ => {}
             }
         }
@@ -516,6 +518,103 @@ pub unsafe extern "C" fn lp_png_encode_rgba(
         }
         if writer.finish().is_err() || sink.failed {
             return 3;
+        }
+        0
+    }));
+    caught.unwrap_or(2)
+}
+
+/// drawImage: `op.image` (straight RGBA, already cropped to the source rect)
+/// scaled into rect = (dx, dy, dw, dh) under the current transform, with
+/// globalAlpha and the composite mode.
+unsafe fn draw_image(pixmap: &mut Pixmap, op: &LpCanvasOp) {
+    let (w, h) = (op.image_w, op.image_h);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let data = slice(op.image, (w as usize) * (h as usize) * 4);
+    if data.len() != (w as usize) * (h as usize) * 4 {
+        return;
+    }
+    let Some(mut src) = Pixmap::new(w, h) else { return };
+    for (i, px) in src.pixels_mut().iter_mut().enumerate() {
+        let c = tiny_skia::ColorU8::from_rgba(data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]);
+        *px = c.premultiply();
+    }
+    let (dx, dy, dw, dh) = (op.rect[0], op.rect[1], op.rect[2], op.rect[3]);
+    if !(dw.is_finite() && dh.is_finite()) || dw == 0.0 || dh == 0.0 {
+        return;
+    }
+    let local = Transform::from_row(dw / w as f32, 0.0, 0.0, dh / h as f32, dx, dy);
+    let t = ts(&op.transform).pre_concat(local);
+    let paint = tiny_skia::PixmapPaint {
+        opacity: op.global_alpha.clamp(0.0, 1.0),
+        blend_mode: blend_mode(op.composite),
+        quality: tiny_skia::FilterQuality::Bilinear,
+    };
+    pixmap.draw_pixmap(0, 0, src.as_ref(), &paint, t, None);
+}
+
+/// Decodes a PNG into straight RGBA. With `out` null (or too small) only the
+/// size is written and 1 is returned; call again with a w*h*4 buffer.
+/// Returns 0 on success, 2 on a decode error.
+#[no_mangle]
+pub unsafe extern "C" fn lp_png_decode_rgba(
+    data: *const u8,
+    len: usize,
+    w_out: *mut u32,
+    h_out: *mut u32,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let bytes = slice(data, len);
+        let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+        dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let Ok(mut reader) = dec.read_info() else { return 2 };
+        let (w, h) = (reader.info().width, reader.info().height);
+        if w == 0 || h == 0 || w > 16384 || h > 16384 {
+            return 2;
+        }
+        *w_out = w;
+        *h_out = h;
+        let need = (w as usize) * (h as usize) * 4;
+        if out.is_null() || out_cap < need {
+            return 1;
+        }
+        let Some(size) = reader.output_buffer_size() else { return 2 };
+        let mut buf = vec![0u8; size];
+        let Ok(frame) = reader.next_frame(&mut buf) else { return 2 };
+        let dst = std::slice::from_raw_parts_mut(out, need);
+        let src = &buf[..frame.buffer_size()];
+        let px = (w as usize) * (h as usize);
+        match frame.color_type {
+            png::ColorType::Rgba => dst.copy_from_slice(&src[..need]),
+            png::ColorType::Rgb => {
+                for i in 0..px {
+                    dst[i * 4..i * 4 + 3].copy_from_slice(&src[i * 3..i * 3 + 3]);
+                    dst[i * 4 + 3] = 255;
+                }
+            }
+            png::ColorType::GrayscaleAlpha => {
+                for i in 0..px {
+                    let g = src[i * 2];
+                    dst[i * 4] = g;
+                    dst[i * 4 + 1] = g;
+                    dst[i * 4 + 2] = g;
+                    dst[i * 4 + 3] = src[i * 2 + 1];
+                }
+            }
+            png::ColorType::Grayscale => {
+                for i in 0..px {
+                    let g = src[i];
+                    dst[i * 4] = g;
+                    dst[i * 4 + 1] = g;
+                    dst[i * 4 + 2] = g;
+                    dst[i * 4 + 3] = 255;
+                }
+            }
+            _ => return 2,
         }
         0
     }));

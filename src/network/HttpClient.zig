@@ -4019,7 +4019,13 @@ pub const Transfer = struct {
         // accumulate duplicates.
         conn.clearHeaders();
         const arena = self.arena.allocator();
-        for (self.req_headers.items) |hdr| {
+        // SellGravity antidetect: Chrome's header order (and the headers curl
+        // would otherwise add in its own place: Cookie, Accept-Encoding,
+        // Content-Length), plus the RFC 9218 priority header.
+        const chrome_order = lp.Persona.active;
+        if (chrome_order) {
+            try self.addChromeOrderedHeaders(conn, arena);
+        } else for (self.req_headers.items) |hdr| {
             try conn.addHeader(arena, hdr.name, hdr.value);
         }
         if (req.body != null and self.findRequestHeader("content-type") == null) {
@@ -4045,9 +4051,11 @@ pub const Transfer = struct {
         try conn.secretHeaders(&client.network.config.http_headers);
         try conn.commitHeaders();
 
-        // Add cookies from cookie jar.
-        if (try self.getCookieString(self.arena.allocator())) |cookies| {
-            try conn.setCookies(@ptrCast(cookies.ptr));
+        // Add cookies from cookie jar (persona mode sends them in-order above).
+        if (!chrome_order) {
+            if (try self.getCookieString(self.arena.allocator())) |cookies| {
+                try conn.setCookies(@ptrCast(cookies.ptr));
+            }
         }
 
         conn.transport = .{ .http = self };
@@ -4306,6 +4314,116 @@ pub const Transfer = struct {
             .value = try arena.dupe(u8, value),
             .source = opts.source,
         });
+    }
+
+    const ChromeHeader = struct {
+        name: []const u8,
+        value: []const u8,
+        rank: u8,
+    };
+
+    // Chrome's request header order per request kind (from captured Chrome
+    // 13x traffic). Names absent from a table (page-set headers) sit just
+    // before the sec-fetch block, keeping their relative order.
+    const chrome_navigate = [_][]const u8{
+        "connection",                "cache-control",   "sec-ch-ua",       "sec-ch-ua-mobile", "sec-ch-ua-platform",
+        "upgrade-insecure-requests", "user-agent",      "accept",          "content-length",   "content-type",
+        "origin",                    "sec-fetch-site",  "sec-fetch-mode",  "sec-fetch-user",   "sec-fetch-dest",
+        "referer",                   "accept-encoding", "accept-language", "cookie",           "priority",
+    };
+    const chrome_cors = [_][]const u8{
+        "connection",     "content-length", "sec-ch-ua-platform", "user-agent",      "accept",
+        "sec-ch-ua",      "content-type",   "sec-ch-ua-mobile",   "origin",          "sec-fetch-site",
+        "sec-fetch-mode", "sec-fetch-dest", "referer",            "accept-encoding", "accept-language",
+        "cookie",         "priority",
+    };
+    const chrome_no_cors = [_][]const u8{
+        "connection",       "content-length", "sec-ch-ua-platform", "user-agent",      "sec-ch-ua",
+        "sec-ch-ua-mobile", "accept",         "content-type",       "origin",          "sec-fetch-site",
+        "sec-fetch-mode",   "sec-fetch-dest", "referer",            "accept-encoding", "accept-language",
+        "cookie",           "priority",
+    };
+
+    fn chromeRank(table: []const []const u8, name: []const u8) u8 {
+        for (table, 0..) |n, i| {
+            if (std.ascii.eqlIgnoreCase(n, name)) return @intCast(i * 2);
+        }
+        for (table, 0..) |n, i| {
+            if (std.mem.eql(u8, n, "sec-fetch-site")) return @intCast(i * 2 - 1);
+        }
+        return 255;
+    }
+
+    // Chrome's RFC 9218 urgency per destination.
+    fn chromePriority(mode: anytype, dest: ?[]const u8) []const u8 {
+        if (mode == .navigate) return "u=0, i";
+        const d = dest orelse return "u=1, i";
+        if (std.mem.eql(u8, d, "document") or std.mem.eql(u8, d, "iframe")) return "u=0, i";
+        if (std.mem.eql(u8, d, "style") or std.mem.eql(u8, d, "font")) return "u=0";
+        if (std.mem.eql(u8, d, "script") or std.mem.eql(u8, d, "worker") or std.mem.eql(u8, d, "sharedworker")) return "u=1";
+        if (std.mem.eql(u8, d, "image")) return "i";
+        return "u=1, i";
+    }
+
+    // Chrome's HTTP/1.1 spelling: client hints and priority lowercase, the
+    // rest as sent by the caller (HTTP/2 lowercases everything anyway).
+    fn chromeName(arena: Allocator, name: []const u8) ![]const u8 {
+        if (std.ascii.startsWithIgnoreCase(name, "sec-ch-") or std.ascii.eqlIgnoreCase(name, "priority")) {
+            return std.ascii.allocLowerString(arena, name);
+        }
+        return name;
+    }
+
+    fn addChromeOrderedHeaders(self: *Transfer, conn: *http.Connection, arena: Allocator) !void {
+        const req = &self.req;
+        const table: []const []const u8 = switch (req.request_mode) {
+            .navigate => &chrome_navigate,
+            .cors, .same_origin => if (self.findRequestHeader("origin") != null or req.method != .GET) &chrome_cors else &chrome_no_cors,
+            .no_cors => &chrome_no_cors,
+        };
+
+        var list: std.ArrayList(ChromeHeader) = try .initCapacity(arena, self.req_headers.items.len + 6);
+        var cookie: ?[]const u8 = null;
+        if (try self.getCookieString(arena)) |c| cookie = c;
+        for (self.req_headers.items) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "cookie")) {
+                cookie = if (cookie) |c| try std.fmt.allocPrint(arena, "{s}; {s}", .{ c, hdr.value }) else hdr.value;
+                continue;
+            }
+            try list.append(arena, .{ .name = try chromeName(arena, hdr.name), .value = hdr.value, .rank = chromeRank(table, hdr.name) });
+        }
+        const https = std.ascii.startsWithIgnoreCase(req.url, "https:");
+        // HTTP/1.1 only; curl drops connection-specific headers for HTTP/2.
+        if (self.findRequestHeader("connection") == null) {
+            try list.append(arena, .{ .name = "Connection", .value = "keep-alive", .rank = chromeRank(table, "connection") });
+        }
+        if (self.findRequestHeader("accept") == null) {
+            // Otherwise curl adds its own right after Host.
+            try list.append(arena, .{ .name = "Accept", .value = "*/*", .rank = chromeRank(table, "accept") });
+        }
+        if (self.findRequestHeader("accept-encoding") == null) {
+            try list.append(arena, .{ .name = "Accept-Encoding", .value = "gzip, deflate, br, zstd", .rank = chromeRank(table, "accept-encoding") });
+        }
+        if (req.body) |b| {
+            if (self.findRequestHeader("content-length") == null) {
+                try list.append(arena, .{ .name = "Content-Length", .value = try std.fmt.allocPrint(arena, "{d}", .{b.len}), .rank = chromeRank(table, "content-length") });
+            }
+        }
+        if (cookie) |c| {
+            try list.append(arena, .{ .name = "Cookie", .value = c, .rank = chromeRank(table, "cookie") });
+        }
+        if (https and self.findRequestHeader("priority") == null) {
+            try list.append(arena, .{ .name = "priority", .value = chromePriority(req.request_mode, self.findRequestHeader("sec-fetch-dest")), .rank = chromeRank(table, "priority") });
+        }
+
+        std.sort.insertion(ChromeHeader, list.items, {}, struct {
+            fn lt(_: void, a: ChromeHeader, b: ChromeHeader) bool {
+                return a.rank < b.rank;
+            }
+        }.lt);
+        for (list.items) |hdr| {
+            try conn.addHeader(arena, hdr.name, hdr.value);
+        }
     }
 
     pub fn findRequestHeader(self: *const Transfer, name: []const u8) ?[]const u8 {

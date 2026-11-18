@@ -696,7 +696,7 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
     }
     log.info(.js, "Illegal constructor call", .{ .name = name });
 
-    const message = v8.v8__String__NewFromUtf8(isolate, "Illegal Constructor", v8.kNormal, 19);
+    const message = v8.v8__String__NewFromUtf8(isolate, "Illegal constructor", v8.kNormal, 19);
     const js_exception = v8.v8__Exception__TypeError(message);
 
     _ = v8.v8__Isolate__ThrowException(isolate, js_exception);

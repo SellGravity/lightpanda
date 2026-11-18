@@ -107,6 +107,10 @@ longitude: ?f64 = null,
 media_device_count: [3]u8 = .{ 1, 1, 1 }, // audioinput, videoinput, audiooutput
 /// --font-exclusion-list: families this profile does not have.
 font_exclusion: ?[]const u8 = null,
+/// --timezone, as given (IANA id), for Intl.
+timezone: ?[]const u8 = null,
+/// --speech-voices: full (OS + Chrome network voices), os, none.
+speech_voices: enum { full, os, none } = .full,
 
 pub fn get() *const Persona {
     return &current;
@@ -150,6 +154,7 @@ const launcher_switches = [_]Switch{
     .{ .name = "webgl-noise", .kind = .flag },
     .{ .name = "fp-seed", .kind = .value },
     .{ .name = "font-exclusion-list", .kind = .value },
+    .{ .name = "speech-voices", .kind = .value },
     .{ .name = "media-device-count", .kind = .value },
     .{ .name = "webrtc-mode", .kind = .value },
     .{ .name = "location-mode", .kind = .value },
@@ -255,6 +260,7 @@ const Raw = struct {
     timezone: ?[]const u8 = null,
     lang: ?[]const u8 = null,
     font_exclusion: ?[]const u8 = null,
+    speech_voices: ?[]const u8 = null,
     proxy_server: ?[]const u8 = null,
     port: ?[]const u8 = null,
     address: ?[]const u8 = null,
@@ -284,6 +290,7 @@ const value_switches = [_]struct { []const u8, []const u8 }{
     .{ "webgl-renderer", "webgl_renderer" },
     .{ "fp-seed", "fp_seed" },
     .{ "font-exclusion-list", "font_exclusion" },
+    .{ "speech-voices", "speech_voices" },
     .{ "media-device-count", "media_device_count" },
     .{ "webrtc-mode", "webrtc_mode" },
     .{ "location-mode", "location_mode" },
@@ -379,6 +386,13 @@ pub fn translateArgs(allocator: Allocator, proc_args: std.process.Args) !std.pro
     // A launcher spawn has no subcommand: it is always the CDP server.
     if (!has_command) {
         try out.insert(allocator, 1, "serve");
+    }
+
+    // A real browser loads every sub-resource: no iframes / workers / images
+    // is a headless tell (CreepJS "Worker: blocked"), and so is a page whose
+    // images and beacons never hit the network.
+    if (!has_command) {
+        try appendOpt(allocator, &out, "--load-resources", "image,iframe,worker,stylesheet,beacon");
     }
 
     // Native options Lightpanda implements itself.
@@ -571,6 +585,12 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
 
     // --- graphics ---------------------------------------------------------
     if (raw.font_exclusion) |v| p.font_exclusion = try allocator.dupe(u8, v);
+    if (raw.speech_voices) |v| {
+        if (std.mem.eql(u8, v, "os")) p.speech_voices = .os else if (std.mem.eql(u8, v, "none")) p.speech_voices = .none;
+    }
+    if (raw.timezone) |v| {
+        if (v.len > 0) p.timezone = try allocator.dupe(u8, v);
+    }
     if (raw.webgl_vendor) |v| p.webgl_vendor = try allocator.dupe(u8, v);
     if (raw.webgl_renderer) |v| p.webgl_renderer = try allocator.dupe(u8, v);
     if (p.webgl_vendor.len == 0) p.webgl_vendor = defaultWebglVendor(p.os);
@@ -904,7 +924,7 @@ test "Persona: translateArgs rewrites a launcher argv" {
         try joined.append(a, ' ');
     }
     try testing.expectEqualStrings(
-        "serve --host 127.0.0.1 --port 9333 --timezone Asia/Ho_Chi_Minh --locale vi-VN --http-proxy socks5h://u:p@1.2.3.4:1080 ",
+        "serve --load-resources image,iframe,worker,stylesheet,beacon --host 127.0.0.1 --port 9333 --timezone Asia/Ho_Chi_Minh --locale vi-VN --http-proxy socks5h://u:p@1.2.3.4:1080 ",
         joined.items,
     );
 

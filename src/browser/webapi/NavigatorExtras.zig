@@ -27,7 +27,7 @@ const Persona = @import("../../Persona.zig");
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
-    const own = [_]type{ NetworkInformation, MediaDevices, MediaDeviceInfo, BatteryManager, MemoryInfo };
+    const own = [_]type{ NetworkInformation, MediaDevices, MediaDeviceInfo, BatteryManager, MemoryInfo, DeprecatedStorageQuota };
     return comptime &(own ++ stub_types);
 }
 
@@ -346,3 +346,32 @@ pub fn memoryInfo(exec: *const Execution) !*MemoryInfo {
     const used = total * 0.72;
     return exec._factory.create(MemoryInfo{ ._used = @floor(used / bucket) * bucket, ._total = total });
 }
+
+// ---------------------------------------------------------------------------
+// navigator.webkitTemporaryStorage / webkitPersistentStorage (Chrome-only,
+// used by incognito detectors through queryUsageAndQuota)
+// ---------------------------------------------------------------------------
+
+pub const DeprecatedStorageQuota = struct {
+    _: u8 = 0,
+
+    fn queryUsageAndQuota(_: *const DeprecatedStorageQuota, success: ?js.Function, _: ?js.Function) void {
+        const cb = success orelse return;
+        cb.call(void, .{ @as(f64, 0), @as(f64, @floatFromInt(@import("StorageManager.zig").quota())) }) catch {};
+    }
+
+    fn requestQuota(_: *const DeprecatedStorageQuota, requested: ?f64, success: ?js.Function, _: ?js.Function) void {
+        const cb = success orelse return;
+        cb.call(void, .{@min(requested orelse 0, @as(f64, @floatFromInt(@import("StorageManager.zig").quota())))}) catch {};
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(DeprecatedStorageQuota);
+        pub const Meta = struct {
+            pub const name = "DeprecatedStorageQuota";
+            pub var class_id: bridge.ClassId = undefined;
+        };
+        pub const queryUsageAndQuota = bridge.function(DeprecatedStorageQuota.queryUsageAndQuota, .{});
+        pub const requestQuota = bridge.function(DeprecatedStorageQuota.requestQuota, .{});
+    };
+};

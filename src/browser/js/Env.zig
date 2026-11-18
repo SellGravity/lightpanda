@@ -340,7 +340,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     // Get the global object for the context
     const global_obj = v8.v8__Context__Global(v8_context).?;
 
-    if (global._session.experimental_features.serviceworker == false) {
+    // SellGravity antidetect: Chrome exposes navigator.serviceWorker and
+    // caches in secure contexts, so a persona keeps them.
+    if (global._session.experimental_features.serviceworker == false and !lp.Persona.active) {
         self.hideServiceWorker(is_frame, v8_context, global_obj);
     }
 

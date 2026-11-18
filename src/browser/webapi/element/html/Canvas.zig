@@ -102,7 +102,7 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
         // reporting the persona GPU; a real Chrome never lacks WebGL.
         if (WebGLRenderingContext.enabled() and isWebGL(context_type)) {
             const version: u8 = if (std.mem.eql(u8, context_type, "webgl2")) 2 else 1;
-            const ctx = try WebGLRenderingContext.create(frame, self.getWidth(), self.getHeight(), version);
+            const ctx = try WebGLRenderingContext.create(frame, self.getWidth(), self.getHeight(), version, self);
             break :blk .{ .webgl = ctx };
         }
 

@@ -29,20 +29,27 @@ const std = @import("std");
 const Persona = @import("../Persona.zig");
 
 const windows_fonts = [_][]const u8{
-    "arial",                  "arial black",          "arial narrow",       "bahnschrift",        "calibri",
-    "calibri light",          "cambria",              "cambria math",       "candara",            "comic sans ms",
-    "consolas",               "constantia",           "corbel",             "courier new",        "ebrima",
-    "franklin gothic medium", "gabriola",             "gadugi",             "georgia",            "impact",
-    "ink free",               "javanese text",        "leelawadee ui",      "lucida console",     "lucida sans unicode",
-    "malgun gothic",          "marlett",              "microsoft himalaya", "microsoft jhenghei", "microsoft new tai lue",
-    "microsoft phagspa",      "microsoft sans serif", "microsoft tai le",   "microsoft yahei",    "microsoft yi baiti",
-    "mingliu-extb",           "mongolian baiti",      "ms gothic",          "mv boli",            "myanmar text",
-    "nirmala ui",             "palatino linotype",    "segoe mdl2 assets",  "segoe print",        "segoe script",
-    "segoe ui",               "segoe ui black",       "segoe ui emoji",     "segoe ui historic",  "segoe ui light",
-    "segoe ui semibold",      "segoe ui semilight",   "segoe ui symbol",    "simsun",             "sitka small",
-    "sylfaen",                "symbol",               "tahoma",             "times new roman",    "trebuchet ms",
-    "verdana",                "webdings",             "wingdings",          "yu gothic",          "helvetica",
+    "arial",                  "arial black",          "arial narrow",       "bahnschrift",           "calibri",
+    "calibri light",          "cambria",              "cambria math",       "candara",               "comic sans ms",
+    "consolas",               "constantia",           "corbel",             "courier new",           "ebrima",
+    "franklin gothic medium", "gabriola",             "gadugi",             "georgia",               "impact",
+    "ink free",               "javanese text",        "leelawadee ui",      "lucida console",        "lucida sans unicode",
+    "malgun gothic",          "marlett",              "microsoft himalaya", "microsoft jhenghei",    "microsoft new tai lue",
+    "microsoft phagspa",      "microsoft sans serif", "microsoft tai le",   "microsoft yahei",       "microsoft yi baiti",
+    "mingliu-extb",           "mongolian baiti",      "ms gothic",          "mv boli",               "myanmar text",
+    "nirmala ui",             "palatino linotype",    "segoe mdl2 assets",  "segoe print",           "segoe script",
+    "segoe ui",               "segoe ui black",       "segoe ui emoji",     "segoe ui historic",     "segoe ui light",
+    "segoe ui semibold",      "segoe ui semilight",   "segoe ui symbol",    "simsun",                "sitka small",
+    "sylfaen",                "symbol",               "tahoma",             "times new roman",       "trebuchet ms",
+    "verdana",                "webdings",             "wingdings",          "yu gothic",             "helvetica",
     "courier",                "times",
+    // Fonts every Windows 10/11 install ships (incl. the East Asian
+    // supplementals scanners require as a set).
+                   "ms pgothic",         "ms ui gothic",          "pmingliu-extb",
+    "mingliu_hkscs-extb",     "nsimsun",              "simsun-extb",        "microsoft jhenghei ui", "microsoft yahei ui",
+    "yu gothic ui",           "yu gothic medium",     "yu gothic light",    "hololens mdl2 assets",  "sitka text",
+    "sitka banner",           "sitka display",        "sitka heading",      "sitka subheading",      "leelawadee",
+    "franklin gothic",        "lucida sans",          "segoe fluent icons", "segoe ui variable",
 };
 
 const mac_fonts = [_][]const u8{
@@ -85,6 +92,10 @@ pub const Resolved = struct {
     /// Horizontal metrics factor relative to the bundled sans face.
     factor: f64,
     generic: Generic,
+    /// Sub-pixel baseline offset (px at 1x) giving each installed face its
+    /// own rasterization, as distinct real fonts have: canvas font probes
+    /// dedupe faces by rendered image at tiny sizes (pixelscan draws 4px).
+    shift: f64 = 0,
 };
 
 fn genericOf(name: []const u8) ?Generic {
@@ -153,7 +164,8 @@ pub fn resolve(family_list: []const u8) ?Resolved {
             const h = std.hash.Wyhash.hash(0x666f6e74, name);
             const spread: f64 = @floatFromInt(h % 2400);
             const base = genericFactor(g);
-            return .{ .factor = base * (0.88 + spread / 10000.0), .generic = g };
+            const shift: f64 = @as(f64, @floatFromInt((h >> 24) % 16)) / 16.0;
+            return .{ .factor = base * (0.88 + spread / 10000.0), .generic = g, .shift = shift };
         }
     }
     // Chrome's default standard font: Times New Roman on desktop, Roboto
@@ -184,4 +196,18 @@ const testing = std.testing;
 test "fonts: shorthand family" {
     try testing.expectEqualStrings("\"Times New Roman\"", familyFromShorthand("11pt \"Times New Roman\""));
     try testing.expectEqualStrings("Arial, sans-serif", familyFromShorthand("italic bold 12px/1.5 Arial, sans-serif"));
+}
+
+/// Whether `name` (a single family, any case) is installed for the persona:
+/// in its OS font list and not excluded. Null when the persona is off.
+pub fn isInstalled(name: []const u8) ?bool {
+    if (!Persona.active) return null;
+    const trimmed = std.mem.trim(u8, name, " \t\"'");
+    if (trimmed.len == 0 or trimmed.len > 64) return false;
+    var buf: [64]u8 = undefined;
+    const lower = std.ascii.lowerString(&buf, trimmed);
+    for (installed(Persona.get().os)) |f| {
+        if (std.mem.eql(u8, f, lower)) return !excluded(trimmed);
+    }
+    return false;
 }

@@ -27,10 +27,21 @@ const StorageManager = @This();
 
 _pad: bool = false,
 
+/// SellGravity antidetect: a normal Chrome profile gets ~60% of the disk as
+/// quota; a small quota (Lightpanda used 1 GiB) is how incognito mode is
+/// detected (quota < 2 x jsHeapSizeLimit). Stable per profile.
+pub fn quota() u64 {
+    const Persona = @import("../../Persona.zig");
+    if (!Persona.active) return 1024 * 1024 * 1024;
+    const gib: u64 = 1024 * 1024 * 1024;
+    const disk_gib: u64 = 238 + Persona.get().noise(0x71756f7461, "disk") % 700;
+    return disk_gib * gib / 10 * 6;
+}
+
 fn estimate(_: *const StorageManager, exec: *const Execution) !js.Promise {
     const est = try exec._factory.create(StorageEstimate{
         ._usage = 0,
-        ._quota = 1024 * 1024 * 1024, // 1 GiB
+        ._quota = quota(),
     });
     return exec.js.local.?.resolvePromise(est);
 }

@@ -69,6 +69,7 @@ pub const PseudoElement = enum {
     none,
     before,
     after,
+    marker,
     other,
 
     pub fn parse(pseudo: []const u8) PseudoElement {
@@ -78,6 +79,7 @@ pub const PseudoElement = enum {
         const name = if (std.mem.startsWith(u8, pseudo, "::")) pseudo[2..] else pseudo[1..];
         if (std.ascii.eqlIgnoreCase(name, "before")) return .before;
         if (std.ascii.eqlIgnoreCase(name, "after")) return .after;
+        if (std.ascii.eqlIgnoreCase(name, "marker")) return .marker;
         return .other;
     }
 };

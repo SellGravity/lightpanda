@@ -345,7 +345,7 @@ const Value = union(enum) {
     pub fn writeComputed(self: Value, writer: *Io.Writer) Io.Writer.Error!void {
         switch (self) {
             .named => |n| try n.rgb.writeLegacy(writer),
-            .keyword => |k| try writer.writeAll(k),
+            .keyword => |k| if (systemColor(k)) |rgb| try writer.writeAll(rgb) else try writer.writeAll(k),
             .rgb => |rgb| try rgb.writeLegacy(writer),
             .missing => |m| switch (m.function) {
                 // Missing components survive computation, which legacy
@@ -1080,7 +1080,7 @@ test "color: parse and serialize" {
     try expectSerialized(" TransParent\n", "transparent", "rgba(0, 0, 0, 0)");
     try expectSerialized("/**/CyAn", "cyan", "rgb(0, 255, 255)");
     try expectSerialized("currentColor", "currentcolor", "currentcolor");
-    try expectSerialized("ButtonFace", "buttonface", "buttonface");
+    try expectSerialized("ButtonFace", "buttonface", "rgb(239, 239, 239)");
     try expectSerialized("#234", null, "rgb(34, 51, 68)");
     try expectSerialized("#FEDCBA", null, "rgb(254, 220, 186)");
     try expectSerialized("#ffffff80", null, "rgba(255, 255, 255, 0.5)");
@@ -1183,4 +1183,35 @@ test "color: parseCanvasColor" {
     try std.testing.expectEqual(@as(u8, 51), c.a);
     try std.testing.expect(parseCanvasColor("hsl(120, 100%, 50%)") != null);
     try std.testing.expect(parseCanvasColor("nope(1)") == null);
+}
+
+/// CSS system colors as Chrome computes them (light color scheme). Keeping
+/// the keyword in getComputedStyle (Lightpanda's default) matches no real
+/// browser; fingerprinting reads e.g. ActiveText.
+fn systemColor(keyword: []const u8) ?[]const u8 {
+    const table = [_]struct { []const u8, []const u8 }{
+        .{ "activetext", "rgb(255, 0, 0)" },
+        .{ "buttonborder", "rgb(118, 118, 118)" },
+        .{ "buttonface", "rgb(239, 239, 239)" },
+        .{ "buttontext", "rgb(0, 0, 0)" },
+        .{ "canvas", "rgb(255, 255, 255)" },
+        .{ "canvastext", "rgb(0, 0, 0)" },
+        .{ "field", "rgb(255, 255, 255)" },
+        .{ "fieldtext", "rgb(0, 0, 0)" },
+        .{ "graytext", "rgb(109, 109, 109)" },
+        .{ "highlight", "rgb(181, 213, 255)" },
+        .{ "highlighttext", "rgb(0, 0, 0)" },
+        .{ "linktext", "rgb(0, 0, 238)" },
+        .{ "mark", "rgb(255, 255, 0)" },
+        .{ "marktext", "rgb(0, 0, 0)" },
+        .{ "selecteditem", "rgb(0, 117, 255)" },
+        .{ "selecteditemtext", "rgb(255, 255, 255)" },
+        .{ "visitedtext", "rgb(85, 26, 139)" },
+        .{ "accentcolor", "rgb(0, 117, 255)" },
+        .{ "accentcolortext", "rgb(255, 255, 255)" },
+    };
+    for (table) |e| {
+        if (std.ascii.eqlIgnoreCase(e[0], keyword)) return e[1];
+    }
+    return null;
 }

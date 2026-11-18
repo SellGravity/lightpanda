@@ -1820,6 +1820,12 @@ static void h2_pri_spec(struct Curl_easy *data,
                         nghttp2_priority_spec *pri_spec)
 {
   int prio = data->set.weight;
+  if(lp_h2_chrome) {
+    /* Chrome: HEADERS carry PRIORITY, exclusive on stream 0, weight 256. */
+    nghttp2_priority_spec_init(pri_spec, 0, 256, 1);
+    data->state.weight = prio;
+    return;
+  }
   nghttp2_priority_spec_init(pri_spec, 0, sweight_wanted(data), FALSE);
   data->state.weight = prio;
 }

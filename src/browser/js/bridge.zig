@@ -1259,6 +1259,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/MimeTypeArray.zig"),
     @import("../webapi/NavigatorExtras.zig"),
     @import("../webapi/RTCPeerConnection.zig"),
+    @import("../webapi/SpeechSynthesis.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
     @import("../webapi/geolocation/Geolocation.zig"),

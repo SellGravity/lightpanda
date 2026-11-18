@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const JS = @import("js/js.zig");
+const native_shim = @import("js/native_shim.zig");
 const Mime = @import("Mime.zig");
 const Page = @import("Page.zig");
 const Factory = @import("Factory.zig");
@@ -468,7 +469,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         var try_catch: JS.TryCatch = undefined;
         try_catch.init(&ls.local);
         defer try_catch.deinit();
-        ls.local.eval(lp.Persona.bootstrap_js, "") catch |err| {
+        native_shim.runPersonaBootstrap(&ls.local, lp.Persona.bootstrap_js, lp.Persona.get().timezone) catch |err| {
             log.warn(.app, "persona bootstrap", .{ .err = err });
         };
     }
@@ -2403,8 +2404,13 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .timestamp = lp.datetime.timestamp(.boot),
     });
 
+    // An iframe whose src is a javascript: URL first gets its about:blank
+    // document, then the script runs in it (same origin as the parent), as
+    // browsers do. Fingerprinters (pixelscan) re-collect values that way to
+    // catch main-frame-only patches.
+    const javascript_src = URL.isJavascriptUrl(src);
     const url = blk: {
-        if (URL.isAboutBlank(src)) {
+        if (URL.isAboutBlank(src) or javascript_src) {
             break :blk "about:blank"; // navigate will handle this special case
         }
         if (std.mem.eql(u8, src, "about:srcdoc")) {
@@ -2459,6 +2465,16 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (new_frame.window._closed) {
         // discarded while navigating, it's no longer in child_frames
         return;
+    }
+
+    if (javascript_src) {
+        self.scheduleNavigation(src, .{
+            .reason = .script,
+            .kind = .{ .push = null },
+        }, .{ .iframe = iframe }) catch |err| {
+            log.debug(.frame, "iframe javascript url", .{ .err = err });
+        };
+        if (new_frame.window._closed) return;
     }
 
     // window[N] is based on document order. We appended above and rely on

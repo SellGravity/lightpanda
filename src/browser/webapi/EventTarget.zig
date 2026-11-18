@@ -30,6 +30,7 @@ const Event = @import("Event.zig");
 const Screen = @import("Screen.zig");
 const NavigatorExtras = @import("NavigatorExtras.zig");
 const RTCPeerConnection = @import("RTCPeerConnection.zig");
+const SpeechSynthesis = @import("SpeechSynthesis.zig");
 const Worker = @import("Worker.zig");
 const Window = @import("Window.zig");
 const FileReader = @import("FileReader.zig");
@@ -122,6 +123,7 @@ pub const Type = enum(u8) {
     service_worker_container,
     service_worker_registration,
     shared_worker,
+    speech_synthesis,
     text_track,
     text_track_cue,
     text_track_list,
@@ -175,6 +177,7 @@ pub fn Subtype(comptime tag: Type) type {
         .service_worker_container => ServiceWorkerContainer,
         .service_worker_registration => ServiceWorkerRegistration,
         .shared_worker => SharedWorker,
+        .speech_synthesis => SpeechSynthesis,
         .text_track => TextTrack,
         .text_track_cue => TextTrackCue,
         .text_track_list => TextTrackList,
@@ -430,6 +433,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .text_track_list => writer.writeAll("<TextTrackList>"),
         .navigation => writer.writeAll("<Navigation>"),
         .screen => writer.writeAll("<Screen>"),
+        .speech_synthesis => writer.writeAll("<SpeechSynthesis>"),
         .rtc_peer_connection => writer.writeAll("<RTCPeerConnection>"),
         .battery_manager => writer.writeAll("<BatteryManager>"),
         .media_devices => writer.writeAll("<MediaDevices>"),
@@ -481,6 +485,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .performance => return "[object Performance]",
         .permission_status => return "[object PermissionStatus]",
         .screen => return "[object Screen]",
+        .speech_synthesis => return "[object SpeechSynthesis]",
         .rtc_peer_connection => return "[object RTCPeerConnection]",
         .battery_manager => return "[object BatteryManager]",
         .media_devices => return "[object MediaDevices]",

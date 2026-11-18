@@ -16,21 +16,25 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
+const fonts = @import("../../fonts.zig");
 
 const FontFace = @This();
 
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 _family: []const u8,
+// SellGravity antidetect: `local("X")` sources resolve against the persona's
+// font list (fonts.zig), like Chrome resolving installed fonts.
+_local: ?[]const u8 = null,
+_failed: bool = false,
 
 pub fn init(family: []const u8, source: []const u8, frame: *Frame) !*FontFace {
-    _ = source;
-
     const arena = try frame.getArena(.tiny, "FontFace");
     errdefer arena.release();
 
@@ -39,6 +43,7 @@ pub fn init(family: []const u8, source: []const u8, frame: *Frame) !*FontFace {
         ._arena = arena,
         ._family = try arena.dupe(u8, family),
     };
+    if (localName(source)) |name| self._local = try arena.dupe(u8, name);
     return self;
 }
 
@@ -58,14 +63,35 @@ fn getFamily(self: *const FontFace) []const u8 {
     return self._family;
 }
 
-// load() - resolves immediately; headless browser has no real font loading.
-pub fn load(_: *FontFace, frame: *Frame) !js.Promise {
-    return frame.js.local.?.resolvePromise({});
+/// The font name in a `local(...)` source (first one), or null.
+fn localName(source: []const u8) ?[]const u8 {
+    const s = std.mem.trim(u8, source, &std.ascii.whitespace);
+    if (!std.ascii.startsWithIgnoreCase(s, "local(")) return null;
+    const end = std.mem.findScalar(u8, s, ')') orelse return null;
+    return std.mem.trim(u8, s["local(".len..end], " \t\"'");
 }
 
-// loaded - returns an already-resolved Promise.
-fn getLoaded(_: *FontFace, frame: *Frame) !js.Promise {
-    return frame.js.local.?.resolvePromise({});
+fn available(self: *const FontFace) bool {
+    const name = self._local orelse return true;
+    return fonts.isInstalled(name) orelse true;
+}
+
+// load() resolves with the face (Chrome's shape). A local() font the
+// persona does not have rejects with a NetworkError, like Chrome.
+pub fn load(self: *FontFace, frame: *Frame) !js.Promise {
+    if (!self.available()) {
+        self._failed = true;
+        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NetworkError } });
+    }
+    return frame.js.local.?.resolvePromise(self);
+}
+
+fn getLoaded(self: *FontFace, frame: *Frame) !js.Promise {
+    return self.load(frame);
+}
+
+fn getStatus(self: *const FontFace) []const u8 {
+    return if (self._failed) "error" else "loaded";
 }
 
 pub const JsApi = struct {
@@ -78,7 +104,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(FontFace.init, .{});
     pub const family = bridge.accessor(FontFace.getFamily, null, .{});
-    pub const status = bridge.property("loaded", .{ .template = false, .readonly = true });
+    pub const status = bridge.accessor(FontFace.getStatus, null, .{});
     pub const style = bridge.property("normal", .{ .template = false, .readonly = true });
     pub const weight = bridge.property("normal", .{ .template = false, .readonly = true });
     pub const stretch = bridge.property("normal", .{ .template = false, .readonly = true });

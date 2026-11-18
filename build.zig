@@ -749,17 +749,30 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Opti
             "-DHAVE_NETINET_IN_H",
         },
         .files = &.{
-            "sfparse.c",                 "nghttp2_alpn.c",   "nghttp2_buf.c",
-            "nghttp2_callbacks.c",       "nghttp2_debug.c",  "nghttp2_extpri.c",
-            "nghttp2_frame.c",           "nghttp2_hd.c",     "nghttp2_hd_huffman.c",
-            "nghttp2_hd_huffman_data.c", "nghttp2_helper.c", "nghttp2_http.c",
-            "nghttp2_map.c",             "nghttp2_mem.c",    "nghttp2_option.c",
-            "nghttp2_outbound_item.c",   "nghttp2_pq.c",     "nghttp2_priority_spec.c",
-            "nghttp2_queue.c",           "nghttp2_rcbuf.c",  "nghttp2_session.c",
-            "nghttp2_stream.c",          "nghttp2_submit.c", "nghttp2_version.c",
-            "nghttp2_ratelim.c",         "nghttp2_time.c",
+            "sfparse.c",                 "nghttp2_alpn.c",    "nghttp2_buf.c",
+            "nghttp2_callbacks.c",       "nghttp2_debug.c",   "nghttp2_extpri.c",
+            "nghttp2_frame.c",           "nghttp2_hd.c",      "nghttp2_hd_huffman.c",
+            "nghttp2_hd_huffman_data.c", "nghttp2_helper.c",  "nghttp2_http.c",
+            "nghttp2_map.c",             "nghttp2_mem.c",     "nghttp2_option.c",
+            "nghttp2_outbound_item.c",   "nghttp2_pq.c",      "nghttp2_priority_spec.c",
+            "nghttp2_queue.c",           "nghttp2_rcbuf.c",   "nghttp2_session.c",
+            "nghttp2_stream.c",          "nghttp2_version.c", "nghttp2_ratelim.c",
+            "nghttp2_time.c",
         },
     });
+
+    // SellGravity antidetect: keeps Chrome's HEADERS priority (see
+    // vendor/nghttp2/nghttp2_submit.c, lp_h2_chrome).
+    mod.addCSourceFile(.{
+        .file = b.path("vendor/nghttp2/nghttp2_submit.c"),
+        .flags = &.{
+            "-DNGHTTP2_STATICLIB",
+            "-DHAVE_TIME_H",
+            "-DHAVE_ARPA_INET_H",
+            "-DHAVE_NETINET_IN_H",
+        },
+    });
+    mod.addIncludePath(dep.path("lib"));
 
     return lib;
 }

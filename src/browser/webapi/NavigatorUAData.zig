@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const builtin = @import("builtin");
 
 const Config = @import("../../Config.zig");
@@ -59,23 +60,33 @@ fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, ex
     // "hints" field is requested (assuming the browser has permission), but it's
     // also valid to just return everything.
 
-    _ = hints;
-
     if (personaActive()) {
+        // Chrome's shape: the low-entropy trio, then only the requested hints,
+        // in UADataValues dictionary order (WebIDL sorts members). Scanners
+        // send this object to their server and compare it with real Chrome.
         const p = Persona.get();
-        return exec.js.local.?.resolvePromise(.{
-            .brands = brandList(),
-            .mobile = p.mobile,
-            .platform = p.uaPlatform(),
-            .architecture = p.uaArchitecture(),
-            .bitness = p.uaBitness(),
-            .model = p.model,
-            .platformVersion = p.platform_version,
-            .uaFullVersion = p.full_version,
-            .fullVersionList = p.brands_full[0..p.brand_count],
-            .wow64 = false,
-            .formFactors = if (p.mobile) [_][]const u8{"Mobile"} else [_][]const u8{"Desktop"},
-        });
+        const local = exec.js.local.?;
+        const obj = local.newObject();
+        const wants = struct {
+            fn f(list: []const []const u8, name: []const u8) bool {
+                for (list) |h| {
+                    if (std.mem.eql(u8, h, name)) return true;
+                }
+                return false;
+            }
+        }.f;
+        _ = try obj.set("brands", brandList(), .{});
+        _ = try obj.set("mobile", p.mobile, .{});
+        _ = try obj.set("platform", p.uaPlatform(), .{});
+        if (wants(hints, "architecture")) _ = try obj.set("architecture", p.uaArchitecture(), .{});
+        if (wants(hints, "bitness")) _ = try obj.set("bitness", p.uaBitness(), .{});
+        if (wants(hints, "formFactors")) _ = try obj.set("formFactors", if (p.mobile) [_][]const u8{"Mobile"} else [_][]const u8{"Desktop"}, .{});
+        if (wants(hints, "fullVersionList")) _ = try obj.set("fullVersionList", p.brands_full[0..p.brand_count], .{});
+        if (wants(hints, "model")) _ = try obj.set("model", p.model, .{});
+        if (wants(hints, "platformVersion")) _ = try obj.set("platformVersion", p.platform_version, .{});
+        if (wants(hints, "uaFullVersion")) _ = try obj.set("uaFullVersion", p.full_version, .{});
+        if (wants(hints, "wow64")) _ = try obj.set("wow64", false, .{});
+        return local.resolvePromise(obj);
     }
 
     const brands = brandList();

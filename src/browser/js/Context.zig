@@ -301,7 +301,7 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
             const global_obj = v8.v8__Context__Global(ls.local.handle).?;
             // navigator.serviceWorker is [SecureContext]. With the feature
             // disabled, Env.createContext has already removed it.
-            if (self.page.session.experimental_features.serviceworker) {
+            if (self.page.session.experimental_features.serviceworker or lp.Persona.active) {
                 env.hideServiceWorker(true, ls.local.handle, global_obj);
             }
             env.hideSecureContextInterfaces(ls.local.handle, global_obj);

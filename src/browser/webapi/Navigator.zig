@@ -63,6 +63,7 @@ _connection: ?*NavigatorExtras.NetworkInformation = null,
 _media_devices: ?*NavigatorExtras.MediaDevices = null,
 _battery: ?*NavigatorExtras.BatteryManager = null,
 _stubs: NavigatorExtras.StubCache = @splat(null),
+_storage_quota: ?*NavigatorExtras.DeprecatedStorageQuota = null,
 // SellGravity antidetect: PDF Plugin / MimeType objects, created on first
 // access so navigator.plugins[0] === navigator.plugins[0].
 _pdf_plugins: [PluginArray.plugin_names.len]?*PluginArray.Plugin = @splat(null),
@@ -285,6 +286,13 @@ fn resolveUndefined(_: *const Navigator, _: ?js.Value, exec: *Execution) !js.Pro
     return exec.js.local.?.resolvePromise({});
 }
 
+fn getStorageQuota(self: *Navigator, exec: *Execution) !*NavigatorExtras.DeprecatedStorageQuota {
+    if (self._storage_quota) |q| return q;
+    const q = try exec._factory.create(NavigatorExtras.DeprecatedStorageQuota{});
+    self._storage_quota = q;
+    return q;
+}
+
 fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
     if (self._geolocation) |g| {
         return g;
@@ -437,6 +445,8 @@ pub const JsApi = struct {
     pub const connection = bridge.accessor(Navigator.getConnection, null, .{});
     pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{});
     pub const getBattery = bridge.function(Navigator.getBattery, .{});
+    pub const webkitTemporaryStorage = bridge.accessor(Navigator.getStorageQuota, null, .{});
+    pub const webkitPersistentStorage = bridge.accessor(Navigator.getStorageQuota, null, .{});
     pub const getGamepads = bridge.function(Navigator.getGamepads, .{});
     pub const vibrate = bridge.function(Navigator.vibrate, .{});
     pub const canShare = bridge.function(Navigator.canShare, .{});

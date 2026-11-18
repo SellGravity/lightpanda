@@ -198,6 +198,20 @@ pub fn init(
     });
     self._performance.attach(self.js);
 
+    // SellGravity antidetect: same persona shaping as windows (Intl time
+    // zone, ...): scanners compare worker values against the page's.
+    if (lp.Persona.active) {
+        var ls: JS.Local.Scope = undefined;
+        self.js.localScope(&ls);
+        defer ls.deinit();
+        var try_catch: JS.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+        @import("../js/native_shim.zig").runPersonaBootstrap(&ls.local, lp.Persona.bootstrap_js, lp.Persona.get().timezone) catch |err| {
+            lp.log.warn(.app, "worker persona bootstrap", .{ .err = err });
+        };
+    }
+
     // A dedicated worker is in the same agent cluster and inherits its creator's
     // origin. Adopt the parent frame's origin (shared *Origin + v8 security
     // token) in place of the context's initial opaque one, so same-origin

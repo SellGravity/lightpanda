@@ -24,6 +24,7 @@ const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 const properties = @import("../../css/properties.zig");
+const chrome_computed = @import("chrome_computed.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -82,7 +83,7 @@ fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const
 
     // Known properties read '' when not set, unknown ones are undefined (and
     // so not `in` the declaration).
-    if (value.len == 0 and properties.isKnown(dash_case) == false) {
+    if (value.len == 0 and properties.isKnown(dash_case) == false and !personaKnows(name)) {
         return error.NotHandled;
     }
     return value;
@@ -159,6 +160,45 @@ fn camelCaseToDashCase(allocator: Allocator, name: []const u8) ![]const u8 {
     return buf[0..write_pos];
 }
 
+// style[0], Object.keys(style): the declared (or, computed, enumerated)
+// property names by index, as CSSStyleDeclaration's indexed getter.
+fn indexedGet(self: *CSSStyleProperties, index: usize, frame: *Frame) ![]const u8 {
+    const decl = self.asCSSStyleDeclaration();
+    if (index >= decl.length()) return error.NotHandled;
+    return decl.item(@intCast(index), frame);
+}
+
+fn getIndexes(self: *CSSStyleProperties, frame: *Frame) !js.Array {
+    const len = self.asCSSStyleDeclaration().length();
+    var arr = frame.js.local.?.newArray(len);
+    for (0..len) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
+// SellGravity antidetect: Chrome's style objects list every supported
+// property's camelCase name as an own enumerable property.
+fn personaKnows(name: []const u8) bool {
+    if (!lp.Persona.active) return false;
+    for (chrome_computed.camelNames(lp.Persona.get().chrome_major)) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    for (chrome_computed.names(lp.Persona.get().chrome_major)) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+fn getNames(_: *CSSStyleProperties, frame: *Frame) !js.Array {
+    const list: []const []const u8 = if (lp.Persona.active) chrome_computed.camelNames(lp.Persona.get().chrome_major) else &.{};
+    var arr = frame.js.local.?.newArray(@intCast(list.len));
+    for (list, 0..) |name, i| {
+        _ = try arr.set(@intCast(i), name, .{});
+    }
+    return arr;
+}
+
 const method_names = std.StaticStringMap(void).initComptime(.{
     .{ "getPropertyValue", {} },
     .{ "setProperty", {} },
@@ -177,5 +217,6 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, CSSStyleProperties.setNamed, null, null, null, .{ .ce_reactions = true });
+    pub const @"[int]" = bridge.indexed(indexedGet, getIndexes, .{});
+    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, CSSStyleProperties.setNamed, null, getNames, null, .{ .ce_reactions = true });
 };

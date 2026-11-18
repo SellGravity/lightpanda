@@ -588,7 +588,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
             error.RangeError => isolate.createRangeError(""),
             error.InvalidStringLength => isolate.createRangeError("Invalid string length"),
             error.OutOfMemory => isolate.createError("out of memory"),
-            error.IllegalConstructor => isolate.createError("Illegal Constructor"),
+            error.IllegalConstructor => isolate.createTypeError("Illegal constructor"),
             error.TryCatchRethrow, error.JsException => unreachable, // early exited a few lines up
             else => domExceptionToJs(&err_local, err) orelse isolate.createError(@errorName(err)),
         };

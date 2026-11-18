@@ -33,6 +33,7 @@ const Navigation = @import("navigation/Navigation.zig");
 const Crypto = @import("Crypto.zig");
 const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
+const SpeechSynthesis = @import("SpeechSynthesis.zig");
 const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
 const VisualViewport = @import("VisualViewport.zig");
@@ -77,6 +78,8 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
+// SellGravity antidetect: window.speechSynthesis (created on first access).
+_speech: ?*SpeechSynthesis = null,
 _model_context: ?*ModelContext = null,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
@@ -269,6 +272,13 @@ fn setPageYOffset(self: *Window, value: js.Value) void {
 
 fn getNavigator(self: *Window) *Navigator {
     return &self._navigator;
+}
+
+fn getSpeechSynthesis(self: *Window, frame: *Frame) !*SpeechSynthesis {
+    if (self._speech) |s| return s;
+    const s = try frame._factory.eventTarget(SpeechSynthesis{ ._proto = undefined });
+    self._speech = s;
+    return s;
 }
 
 fn getScheduler(self: *Window) *Scheduler {
@@ -593,6 +603,9 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
             log.debug(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
         }
         gop.value_ptr.* = try CSSStyleProperties.init(.{ .computed = element }, frame);
+        if (pseudo != .none and lp.Persona.active) {
+            gop.value_ptr.*.asCSSStyleDeclaration().applyPseudoRules(element, pseudo_element.?, frame) catch {};
+        }
     }
     return gop.value_ptr.*;
 }
@@ -1169,6 +1182,7 @@ pub const JsApi = struct {
     pub const window = bridge.accessor(Window.getWindow, null, .{});
     pub const parent = bridge.accessor(Window.getParent, Window.setParent, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
+    pub const speechSynthesis = bridge.accessor(Window.getSpeechSynthesis, null, .{});
     pub const scheduler = bridge.accessor(Window.getScheduler, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});

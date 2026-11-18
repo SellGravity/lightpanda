@@ -19,8 +19,11 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
+const Execution = js.Execution;
 const Frame = @import("../../Frame.zig");
 const Persona = @import("../../../Persona.zig");
+const Canvas = @import("../element/html/Canvas.zig");
+const datetime = @import("lightpanda").datetime;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -49,6 +52,8 @@ _width: u32 = 300,
 _height: u32 = 150,
 // 1 for "webgl", 2 for "webgl2" (same object model, version-specific answers).
 _version: u8 = 1,
+// The <canvas> this context belongs to (gl.canvas).
+_canvas: ?*Canvas = null,
 
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
@@ -176,8 +181,8 @@ pub fn enabled() bool {
     return Persona.active;
 }
 
-pub fn create(frame: *Frame, width: u32, height: u32, version: u8) !*WebGLRenderingContext {
-    return frame._factory.create(WebGLRenderingContext{ ._width = width, ._height = height, ._version = version });
+pub fn create(owner: anytype, width: u32, height: u32, version: u8, canvas: ?*Canvas) !*WebGLRenderingContext {
+    return owner._factory.create(WebGLRenderingContext{ ._width = width, ._height = height, ._version = version, ._canvas = canvas });
 }
 
 const Param = union(enum) {
@@ -208,7 +213,20 @@ const aliased_point_size_range = [_]f32{ 1, 1024 };
 const aliased_point_size_range_apple = [_]f32{ 1, 511 };
 const aliased_point_size_range_mobile = [_]f32{ 1, 1023 };
 
+/// A real getParameter is a round trip through the GPU command buffer (tens of
+/// microseconds); answering in nanoseconds is a measurable tell (BrowserScan
+/// times UNMASKED_RENDERER_WEBGL calls and rejects > 100 per ms).
+fn gpuLatency() void {
+    const p = Persona.get();
+    const jitter: u64 = @intCast(p.noise(0x67707521, "latency") % 9);
+    const until = datetime.microTimestamp(.boot) + 13 + jitter;
+    while (datetime.microTimestamp(.boot) < until) {
+        std.atomic.spinLoopHint();
+    }
+}
+
 fn getParameter(self: *const WebGLRenderingContext, pname_value: ?f64) ?Param {
+    if (Persona.active) gpuLatency();
     const pname: u32 = if (pname_value) |v| (if (v >= 0 and v <= 0xFFFFFFFF) @intFromFloat(v) else return null) else return null;
     const p = Persona.get();
     const class = gpuClass();
@@ -368,17 +386,17 @@ fn isSupported(name: []const u8, version: u8) bool {
 }
 
 /// Enables a WebGL extension.
-fn getExtension(self: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
+fn getExtension(self: *const WebGLRenderingContext, name: []const u8, exec: *Execution) !?Extension {
     if (!isSupported(name, self._version)) return null;
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
         .WEBGL_debug_renderer_info => {
-            const info = try frame._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
+            const info = try exec._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
             return .{ .WEBGL_debug_renderer_info = info };
         },
         .WEBGL_lose_context => {
-            const ctx = try frame._factory.create(Extension.Type.WEBGL_lose_context{});
+            const ctx = try exec._factory.create(Extension.Type.WEBGL_lose_context{});
             return .{ .WEBGL_lose_context = ctx };
         },
         inline else => |comptime_enum| @unionInit(Extension, @tagName(comptime_enum), {}),
@@ -413,6 +431,10 @@ fn isContextLost(_: *const WebGLRenderingContext) bool {
 
 fn getError(_: *const WebGLRenderingContext) u32 {
     return 0;
+}
+
+fn getCanvas(self: *const WebGLRenderingContext) ?*Canvas {
+    return self._canvas;
 }
 
 fn getDrawingBufferWidth(self: *const WebGLRenderingContext) u32 {
@@ -453,7 +475,7 @@ pub const ShaderPrecisionFormat = struct {
     };
 };
 
-fn getShaderPrecisionFormat(_: *const WebGLRenderingContext, _: ?f64, precision_type: ?f64, frame: *Frame) !?*ShaderPrecisionFormat {
+fn getShaderPrecisionFormat(_: *const WebGLRenderingContext, _: ?f64, precision_type: ?f64, exec: *Execution) !?*ShaderPrecisionFormat {
     const t: u32 = if (precision_type) |v| @intFromFloat(@max(0, @min(v, 0xFFFF))) else return null;
     const mobile = gpuClass() == .mobile;
     const fmt: ShaderPrecisionFormat = switch (t) {
@@ -469,7 +491,7 @@ fn getShaderPrecisionFormat(_: *const WebGLRenderingContext, _: ?f64, precision_
             .{ ._range_min = 31, ._range_max = 30, ._precision = 0 },
         else => return null,
     };
-    return try frame._factory.create(fmt);
+    return try exec._factory.create(fmt);
 }
 
 // --- opaque GL objects -----------------------------------------------------
@@ -523,35 +545,35 @@ pub const WebGLActiveInfo = struct {
     };
 };
 
-fn createBuffer(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLBuffer {
-    return frame._factory.create(WebGLBuffer{});
+fn createBuffer(_: *const WebGLRenderingContext, exec: *Execution) !*WebGLBuffer {
+    return exec._factory.create(WebGLBuffer{});
 }
-fn createShader(_: *const WebGLRenderingContext, _: ?f64, frame: *Frame) !*WebGLShader {
-    return frame._factory.create(WebGLShader{});
+fn createShader(_: *const WebGLRenderingContext, _: ?f64, exec: *Execution) !*WebGLShader {
+    return exec._factory.create(WebGLShader{});
 }
-fn createProgram(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLProgram {
-    return frame._factory.create(WebGLProgram{});
+fn createProgram(_: *const WebGLRenderingContext, exec: *Execution) !*WebGLProgram {
+    return exec._factory.create(WebGLProgram{});
 }
-fn createTexture(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLTexture {
-    return frame._factory.create(WebGLTexture{});
+fn createTexture(_: *const WebGLRenderingContext, exec: *Execution) !*WebGLTexture {
+    return exec._factory.create(WebGLTexture{});
 }
-fn createFramebuffer(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLFramebuffer {
-    return frame._factory.create(WebGLFramebuffer{});
+fn createFramebuffer(_: *const WebGLRenderingContext, exec: *Execution) !*WebGLFramebuffer {
+    return exec._factory.create(WebGLFramebuffer{});
 }
-fn createRenderbuffer(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLRenderbuffer {
-    return frame._factory.create(WebGLRenderbuffer{});
+fn createRenderbuffer(_: *const WebGLRenderingContext, exec: *Execution) !*WebGLRenderbuffer {
+    return exec._factory.create(WebGLRenderbuffer{});
 }
-fn getUniformLocation(_: *const WebGLRenderingContext, _: ?js.Value, _: ?[]const u8, frame: *Frame) !*WebGLUniformLocation {
-    return frame._factory.create(WebGLUniformLocation{});
+fn getUniformLocation(_: *const WebGLRenderingContext, _: ?js.Value, _: ?[]const u8, exec: *Execution) !*WebGLUniformLocation {
+    return exec._factory.create(WebGLUniformLocation{});
 }
 fn getAttribLocation(_: *const WebGLRenderingContext, _: ?js.Value, _: ?[]const u8) i32 {
     return 0;
 }
-fn getActiveAttrib(_: *const WebGLRenderingContext, _: ?js.Value, _: ?f64, frame: *Frame) !*WebGLActiveInfo {
-    return frame._factory.create(WebGLActiveInfo{ ._name = "attrVertex" });
+fn getActiveAttrib(_: *const WebGLRenderingContext, _: ?js.Value, _: ?f64, exec: *Execution) !*WebGLActiveInfo {
+    return exec._factory.create(WebGLActiveInfo{ ._name = "attrVertex" });
 }
-fn getActiveUniform(_: *const WebGLRenderingContext, _: ?js.Value, _: ?f64, frame: *Frame) !*WebGLActiveInfo {
-    return frame._factory.create(WebGLActiveInfo{ ._name = "uniformOffset", ._type = 0x8B50 });
+fn getActiveUniform(_: *const WebGLRenderingContext, _: ?js.Value, _: ?f64, exec: *Execution) !*WebGLActiveInfo {
+    return exec._factory.create(WebGLActiveInfo{ ._name = "uniformOffset", ._type = 0x8B50 });
 }
 /// COMPILE_STATUS / LINK_STATUS / VALIDATE_STATUS -> true, counts -> 1.
 fn getObjectParameter(_: *const WebGLRenderingContext, _: ?js.Value, pname: ?f64) Param {
@@ -591,6 +613,9 @@ pub const JsApi = struct {
     pub const isContextLost = bridge.function(WebGLRenderingContext.isContextLost, .{});
     pub const getError = bridge.function(WebGLRenderingContext.getError, .{});
     pub const drawingBufferWidth = bridge.accessor(WebGLRenderingContext.getDrawingBufferWidth, null, .{});
+    pub const canvas = bridge.accessor(WebGLRenderingContext.getCanvas, null, .{});
+    pub const drawingBufferColorSpace = bridge.property("srgb", .{ .template = false, .readonly = false });
+    pub const unpackColorSpace = bridge.property("srgb", .{ .template = false, .readonly = false });
     pub const drawingBufferHeight = bridge.accessor(WebGLRenderingContext.getDrawingBufferHeight, null, .{});
 
     pub const createBuffer = bridge.function(WebGLRenderingContext.createBuffer, .{});
