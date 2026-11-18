@@ -459,6 +459,20 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     self.main_js = self.js;
     self.window._performance.attach(self.js);
 
+    // SellGravity antidetect: shape the global like Chrome before any page
+    // script runs (remove non-Chrome APIs, add window.chrome).
+    if (lp.Persona.active) {
+        var ls: JS.Local.Scope = undefined;
+        self.js.localScope(&ls);
+        defer ls.deinit();
+        var try_catch: JS.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+        ls.local.eval(lp.Persona.bootstrap_js, "") catch |err| {
+            log.warn(.app, "persona bootstrap", .{ .err = err });
+        };
+    }
+
     const location = try Location.init("about:blank", self);
     // We're holding a reference in Zig-side.
     location.acquireRef();
@@ -957,7 +971,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     {
         // Ours until submit; clean up if header setup fails.
         errdefer transfer.deinit();
-        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigationAccept(), .{});
+        if (lp.Persona.active) {
+            // Chrome sends this on every top-level and frame navigation.
+            try transfer.setHeader("Upgrade-Insecure-Requests", "1", .{});
+        }
         if (opts.header) |hdr| {
             // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
             if (HttpClient.Header.parse(hdr)) |parsed| {

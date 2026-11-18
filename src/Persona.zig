@@ -204,6 +204,15 @@ fn findSwitch(name: []const u8) ?Switch {
     return null;
 }
 
+/// Lightpanda's own options that share a Chromium prefix; never swallowed.
+fn isNativeOption(name: []const u8) bool {
+    const native = [_][]const u8{ "disable-subframes", "disable-workers", "enable-external-stylesheets", "no-llm" };
+    for (native) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
 fn isIgnored(name: []const u8) bool {
     for (ignored_prefixes) |p| {
         if (std.mem.startsWith(u8, name, p)) return true;
@@ -255,34 +264,7 @@ const Raw = struct {
 
 fn store(raw: *Raw, name: []const u8, value: ?[]const u8) void {
     const v = value orelse "";
-    if (std.mem.eql(u8, name, "user-agent")) raw.user_agent = v
-    else if (std.mem.eql(u8, name, "ua-full-version")) raw.ua_full_version = v
-    else if (std.mem.eql(u8, name, "ua-platform-version")) raw.ua_platform_version = v
-    else if (std.mem.eql(u8, name, "hardware-concurrency")) raw.hardware_concurrency = v
-    else if (std.mem.eql(u8, name, "device-memory")) raw.device_memory = v
-    else if (std.mem.eql(u8, name, "device-mode")) raw.device_mode = v
-    else if (std.mem.eql(u8, name, "device-size")) raw.device_size = v
-    else if (std.mem.eql(u8, name, "window-size")) raw.window_size = v
-    else if (std.mem.eql(u8, name, "screen-size")) raw.screen_size = v
-    else if (std.mem.eql(u8, name, "window-position")) raw.window_position = v
-    else if (std.mem.eql(u8, name, "window-scale") or std.mem.eql(u8, name, "force-device-scale-factor")) raw.window_scale = v
-    else if (std.mem.eql(u8, name, "max-touch-points")) raw.max_touch_points = v
-    else if (std.mem.eql(u8, name, "webgl-vendor")) raw.webgl_vendor = v
-    else if (std.mem.eql(u8, name, "webgl-renderer")) raw.webgl_renderer = v
-    else if (std.mem.eql(u8, name, "fp-seed")) raw.fp_seed = v
-    else if (std.mem.eql(u8, name, "media-device-count")) raw.media_device_count = v
-    else if (std.mem.eql(u8, name, "webrtc-mode")) raw.webrtc_mode = v
-    else if (std.mem.eql(u8, name, "location-mode")) raw.location_mode = v
-    else if (std.mem.eql(u8, name, "timezone")) raw.timezone = v
-    else if (std.mem.eql(u8, name, "lang") or std.mem.eql(u8, name, "accept-lang")) raw.lang = v
-    else if (std.mem.eql(u8, name, "proxy-server")) raw.proxy_server = v
-    else if (std.mem.eql(u8, name, "remote-debugging-port")) raw.port = v
-    else if (std.mem.eql(u8, name, "remote-debugging-address")) raw.address = v
-    else if (std.mem.eql(u8, name, "user-data-dir")) raw.user_data_dir = v
-    else if (std.mem.eql(u8, name, "canvas-noise")) raw.canvas_noise = true
-    else if (std.mem.eql(u8, name, "audio-noise")) raw.audio_noise = true
-    else if (std.mem.eql(u8, name, "fonts-noise")) raw.fonts_noise = true
-    else if (std.mem.eql(u8, name, "rects-noise")) raw.rects_noise = true;
+    if (std.mem.eql(u8, name, "user-agent")) raw.user_agent = v else if (std.mem.eql(u8, name, "ua-full-version")) raw.ua_full_version = v else if (std.mem.eql(u8, name, "ua-platform-version")) raw.ua_platform_version = v else if (std.mem.eql(u8, name, "hardware-concurrency")) raw.hardware_concurrency = v else if (std.mem.eql(u8, name, "device-memory")) raw.device_memory = v else if (std.mem.eql(u8, name, "device-mode")) raw.device_mode = v else if (std.mem.eql(u8, name, "device-size")) raw.device_size = v else if (std.mem.eql(u8, name, "window-size")) raw.window_size = v else if (std.mem.eql(u8, name, "screen-size")) raw.screen_size = v else if (std.mem.eql(u8, name, "window-position")) raw.window_position = v else if (std.mem.eql(u8, name, "window-scale") or std.mem.eql(u8, name, "force-device-scale-factor")) raw.window_scale = v else if (std.mem.eql(u8, name, "max-touch-points")) raw.max_touch_points = v else if (std.mem.eql(u8, name, "webgl-vendor")) raw.webgl_vendor = v else if (std.mem.eql(u8, name, "webgl-renderer")) raw.webgl_renderer = v else if (std.mem.eql(u8, name, "fp-seed")) raw.fp_seed = v else if (std.mem.eql(u8, name, "media-device-count")) raw.media_device_count = v else if (std.mem.eql(u8, name, "webrtc-mode")) raw.webrtc_mode = v else if (std.mem.eql(u8, name, "location-mode")) raw.location_mode = v else if (std.mem.eql(u8, name, "timezone")) raw.timezone = v else if (std.mem.eql(u8, name, "lang") or std.mem.eql(u8, name, "accept-lang")) raw.lang = v else if (std.mem.eql(u8, name, "proxy-server")) raw.proxy_server = v else if (std.mem.eql(u8, name, "remote-debugging-port")) raw.port = v else if (std.mem.eql(u8, name, "remote-debugging-address")) raw.address = v else if (std.mem.eql(u8, name, "user-data-dir")) raw.user_data_dir = v else if (std.mem.eql(u8, name, "canvas-noise")) raw.canvas_noise = true else if (std.mem.eql(u8, name, "audio-noise")) raw.audio_noise = true else if (std.mem.eql(u8, name, "fonts-noise")) raw.fonts_noise = true else if (std.mem.eql(u8, name, "rects-noise")) raw.rects_noise = true;
 }
 
 /// Rewrites a launcher-style argv into a Lightpanda argv and fills `current`.
@@ -328,11 +310,7 @@ pub fn translateArgs(allocator: Allocator, proc_args: std.process.Args) !std.pro
             continue;
         }
 
-        if (parsed.value != null and isIgnored(parsed.name)) {
-            seen = true;
-            continue;
-        }
-        if (parsed.value == null and isIgnored(parsed.name) and !has_command) {
+        if (isIgnored(parsed.name) and !isNativeOption(parsed.name)) {
             seen = true;
             continue;
         }
@@ -440,6 +418,12 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
                 p.app_version = p.user_agent.?["Mozilla/".len..];
             }
             p.platform_version = defaultPlatformVersion(p.os, ua);
+            // Chrome always reports three components ("14" -> "14.0.0").
+            const dots = std.mem.count(u8, p.platform_version, ".");
+            if (dots < 2) {
+                const pad: []const u8 = if (dots == 0) ".0.0" else ".0";
+                p.platform_version = try std.mem.concat(allocator, u8, &.{ p.platform_version, pad });
+            }
         }
     }
     if (raw.device_mode) |m| {
@@ -874,4 +858,31 @@ test "Persona: translateArgs rewrites a launcher argv" {
     try testing.expectEqual(@as(?u32, 737), p.inner_height);
     try testing.expect(p.canvas_noise);
     try testing.expectEqualStrings("Win32", p.navigatorPlatform());
+}
+
+/// Evaluated in every frame's JS context when the persona is active, before
+/// page scripts: removes APIs Chrome does not have and adds `window.chrome`.
+/// Functions are bound so their toString() reads "[native code]".
+pub const bootstrap_js: []const u8 = @embedFile("persona_bootstrap.js");
+
+/// https/wss, or a loopback http origin (what Chrome calls potentially
+/// trustworthy for client hints).
+pub fn isTrustworthyUrl(url: []const u8) bool {
+    if (std.ascii.startsWithIgnoreCase(url, "https://") or std.ascii.startsWithIgnoreCase(url, "wss://")) return true;
+    const loopback = [_][]const u8{ "http://localhost", "http://127.0.0.1", "http://[::1]", "ws://localhost", "ws://127.0.0.1" };
+    for (loopback) |prefix| {
+        if (std.ascii.startsWithIgnoreCase(url, prefix)) {
+            if (url.len == prefix.len) return true;
+            const next = url[prefix.len];
+            if (next == '/' or next == ':') return true;
+        }
+    }
+    return false;
+}
+
+test "Persona: client hints only on trustworthy origins" {
+    try testing.expect(isTrustworthyUrl("https://example.com/"));
+    try testing.expect(isTrustworthyUrl("http://localhost:8080/x"));
+    try testing.expect(!isTrustworthyUrl("http://example.com/"));
+    try testing.expect(!isTrustworthyUrl("http://localhost.evil.com/"));
 }

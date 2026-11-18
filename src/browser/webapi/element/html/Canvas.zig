@@ -94,6 +94,15 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
         // catch the throw, reset, re-render, and loop forever.
         // Spec-correct signal for "no WebGL" is null, so apps that check
         // (Three.js does) can degrade gracefully.
+        // SellGravity antidetect: launcher profiles get a WebGL 1 context
+        // reporting the persona GPU; a real Chrome never lacks WebGL.
+        if (WebGLRenderingContext.enabled() and
+            (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")))
+        {
+            const ctx = try WebGLRenderingContext.create(frame, self.getWidth(), self.getHeight());
+            break :blk .{ .webgl = ctx };
+        }
+
         if (isWebGL(context_type)) {
             frame.page.status.noteUnsupported(.webgl);
         }

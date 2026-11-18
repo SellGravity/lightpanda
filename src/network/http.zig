@@ -484,7 +484,10 @@ pub const Connection = struct {
         // compression, don't remove this. CloudFront will send gzip content
         // even if we don't support it, and then it won't be decompressed.
         // empty string means: use whatever's available
-        try libcurl.curl_easy_setopt(self._easy, .accept_encoding, "");
+        // SellGravity antidetect: Chrome's exact list and order (libcurl's
+        // default is "deflate, gzip, br, zstd").
+        const accept_encoding: [:0]const u8 = if (lp.Persona.active) "gzip, deflate, br, zstd" else "";
+        try libcurl.curl_easy_setopt(self._easy, .accept_encoding, accept_encoding.ptr);
 
         if (comptime lp.IS_TEST) {
             try libcurl.curl_easy_setopt(self._easy, .connect_to, test_connect_to);

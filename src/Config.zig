@@ -1139,6 +1139,13 @@ pub const HttpHeaders = struct {
     // Document-navigation Accept value Chrome sends.
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
+    /// Chrome's document Accept, used for launcher profiles.
+    pub const chrome_navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+
+    pub fn navigationAccept() [:0]const u8 {
+        return if (lp.Persona.active) chrome_navigation_accept else navigation_accept;
+    }
+
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
 
     proxy_bearer_header: ?[:0]const u8,

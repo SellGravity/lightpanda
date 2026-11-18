@@ -1100,6 +1100,36 @@ pub fn buildJSONVersionResponse(app: *const App, ws_url: []const u8) ![]const u8
             .message = "--host is a wildcard (0.0.0.0 / ::) without --advertise-host; clients on other hosts will need --advertise-host to reach the CDP endpoint",
         });
     }
+    // SellGravity antidetect: some anti-bot scripts probe localhost debug
+    // ports; a launcher profile answers like the Chrome it impersonates.
+    if (lp.Persona.active) {
+        const p = lp.Persona.get();
+        if (p.chrome_major > 0) {
+            const chrome_format =
+                "{{" ++
+                "\"Browser\": \"Chrome/{s}\", " ++
+                "\"Protocol-Version\": \"1.3\", " ++
+                "\"User-Agent\": {f}, " ++
+                "\"V8-Version\": \"{d}.{d}.0.0\", " ++
+                "\"WebKit-Version\": \"537.36\", " ++
+                "\"webSocketDebuggerUrl\": {f}" ++
+                "}}";
+            const chrome_url = std.json.fmt(ws_url, .{});
+            const chrome_ua = std.json.fmt(p.user_agent orelse "", .{});
+            // Chrome N ships V8 N/10 . N%10 (Chrome 140 -> V8 14.0).
+            const v8_major = p.chrome_major / 10;
+            const args = .{ p.full_version, chrome_ua, v8_major, p.chrome_major % 10, chrome_url };
+            const len = std.fmt.count(chrome_format, args);
+            return try app.allocator.print(
+                "HTTP/1.1 200 OK\r\n" ++
+                    "Content-Length: {d}\r\n" ++
+                    "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+                    chrome_format,
+                .{ len, p.full_version, chrome_ua, v8_major, p.chrome_major % 10, chrome_url },
+            );
+        }
+    }
+
     const body_format =
         "{{" ++
         "\"Browser\": \"Lightpanda/1.0\", " ++

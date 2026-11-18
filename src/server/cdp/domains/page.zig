@@ -57,11 +57,15 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         bringToFront,
         setInterceptFileChooserDialog,
         setDocumentContent,
+        // SellGravity: InviBrowser's automation asks Page.getFrameOwner;
+        // Chrome only has DOM.getFrameOwner, answer it the same way.
+        getFrameOwner,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
         .getFrameTree => return getFrameTree(cmd),
+        .getFrameOwner => return @import("dom.zig").getFrameOwner(cmd),
         .getNavigationHistory => return getNavigationHistory(cmd),
         .setLifecycleEventsEnabled => return setLifecycleEventsEnabled(cmd),
         .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),

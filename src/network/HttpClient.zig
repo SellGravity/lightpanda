@@ -4413,7 +4413,10 @@ pub const Transfer = struct {
     // The client's baseline headers, added to every request at creation.
     fn seedHeaders(self: *Transfer) !void {
         const baseline = self.client.baselineHeaders();
+        // Chrome only sends client hints to potentially trustworthy origins.
+        const drop_hints = lp.Persona.active and !lp.Persona.isTrustworthyUrl(self.req.url);
         for (baseline.slice()) |hdr| {
+            if (drop_hints and std.ascii.startsWithIgnoreCase(hdr.name, "Sec-Ch-")) continue;
             try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
         }
 

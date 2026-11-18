@@ -638,7 +638,7 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn getFrameOwner(cmd: *CDP.Command) !void {
+pub fn getFrameOwner(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         frameId: []const u8,
     })) orelse return error.InvalidParams;

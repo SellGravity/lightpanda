@@ -197,7 +197,7 @@ pub fn request(frame: *Frame, url: [:0]const u8, shutdown_callback: HttpClient.R
 pub fn newTransfer(frame: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
     const transfer = try frame.newRequest(req);
     errdefer transfer.deinit();
-    try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+    try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigationAccept(), .{});
     try frame.headersForRequest(transfer, .{});
     return transfer;
 }
