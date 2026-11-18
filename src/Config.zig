@@ -1181,13 +1181,18 @@ pub const HttpHeaders = struct {
     };
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
-        const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
+        // SellGravity antidetect: the launcher UA (any string, Mozilla included)
+        // comes from the persona; it bypasses userAgentValidator on purpose.
+        const persona_ua: ?[]const u8 = if (lp.Persona.active) lp.Persona.get().user_agent else null;
+        const user_agent: [:0]const u8 = if (persona_ua) |ua|
+            try allocator.dupeSentinel(u8, ua, 0)
+        else if (config.userAgent()) |ua|
             try allocator.dupeSentinel(u8, ua, 0)
         else if (config.userAgentSuffix()) |suffix|
             try allocator.printSentinel("{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
-        errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
+        errdefer if (user_agent.ptr != user_agent_base.ptr) allocator.free(user_agent);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
             try allocator.printSentinel("Proxy-Authorization: Bearer {s}", .{token}, 0)
@@ -1805,6 +1810,13 @@ pub fn validateUserAgent(ua: []const u8) !void {
         if (!std.ascii.isPrint(c)) {
             return error.NonPrintable;
         }
+    }
+
+    // SellGravity antidetect: a launcher profile impersonates a real browser,
+    // so its own UA and CDP overrides (Playwright/Puppeteer always send a
+    // Mozilla UA) must be accepted.
+    if (lp.Persona.active) {
+        return;
     }
 
     if (std.ascii.findIgnoreCase(ua, "mozilla") != null) {

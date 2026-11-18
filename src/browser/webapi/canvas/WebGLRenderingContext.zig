@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Persona = @import("../../../Persona.zig");
 
 pub fn registerTypes() []const type {
     return &.{
@@ -151,8 +152,17 @@ const Extension = union(enum) {
 /// Return value also depends on what's being passed as `pname`; we don't really
 /// support any though.
 fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
-    _ = pname;
-    return "";
+    // SellGravity antidetect: the strings a Chrome/ANGLE build reports. The
+    // unmasked pair comes from --webgl-vendor / --webgl-renderer.
+    return switch (pname) {
+        0x1F00 => "WebKit", // VENDOR
+        0x1F01 => "WebKit WebGL", // RENDERER
+        0x1F02 => "WebGL 1.0 (OpenGL ES 2.0 Chromium)", // VERSION
+        0x8B8C => "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)", // SHADING_LANGUAGE_VERSION
+        0x9245 => Persona.get().webgl_vendor, // UNMASKED_VENDOR_WEBGL
+        0x9246 => Persona.get().webgl_renderer, // UNMASKED_RENDERER_WEBGL
+        else => "",
+    };
 }
 
 /// Enables a WebGL extension.

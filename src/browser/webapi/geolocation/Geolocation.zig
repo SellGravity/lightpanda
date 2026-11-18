@@ -166,12 +166,21 @@ const Request = struct {
         // Headless Chrome can't answer a permission prompt, so anything short of
         // an explicit grant is a denial - which is why Puppeteer and Playwright
         // both send Browser.grantPermissions alongside setGeolocationOverride.
-        if (browser.permissions.get("geolocation") orelse .prompt != .granted) {
+        // SellGravity antidetect: `--location-mode=allow,lat,lng` grants the
+        // permission and supplies the position (Chromium-fork parity).
+        const persona = lp.Persona.get();
+        const persona_allows = lp.Persona.active and persona.location_mode == .allow;
+        if (!persona_allows and (browser.permissions.get("geolocation") orelse .prompt != .granted)) {
             self.deliverError(.permission_denied);
             return null;
         }
 
-        const override = browser.geolocation_override orelse {
+        const persona_override: ?Override = if (lp.Persona.active and persona.latitude != null and persona.longitude != null)
+            .{ .latitude = persona.latitude.?, .longitude = persona.longitude.?, .accuracy = 20 + persona.noiseOffset(0x67656f, "accuracy", 15) }
+        else
+            null;
+
+        const override = browser.geolocation_override orelse persona_override orelse {
             self.deliverError(.position_unavailable);
             return null;
         };

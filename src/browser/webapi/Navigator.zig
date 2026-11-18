@@ -33,6 +33,7 @@ const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
 const LockManager = @import("LockManager.zig");
+const Persona = @import("../../Persona.zig");
 
 const Execution = js.Execution;
 const resource_load = Frame.resource_load;
@@ -81,6 +82,9 @@ pub fn getAppCodeName(_: *const Navigator) []const u8 {
 }
 
 pub fn getAppVersion(_: *const Navigator) []const u8 {
+    if (Persona.active) {
+        if (Persona.get().app_version) |v| return v;
+    }
     return switch (builtin.target.os.tag) {
         .macos => "5.0 (Macintosh)",
         .windows => "5.0 (Windows)",
@@ -102,23 +106,33 @@ fn getCookieEnabled(_: *const Navigator) bool {
 }
 
 pub fn getHardwareConcurrency(_: *const Navigator) u32 {
-    return 4;
+    return Persona.get().hardware_concurrency;
 }
 
 pub fn getDeviceMemory(_: *const Navigator) f64 {
-    return 8.0;
+    return Persona.get().device_memory;
 }
 
 fn getMaxTouchPoints(_: *const Navigator) u32 {
-    return 0;
+    return Persona.get().max_touch_points;
 }
 
 pub fn getVendor(_: *const Navigator) []const u8 {
+    // Chrome personas: every Chromium build reports Google Inc.
+    if (Persona.active and Persona.get().chrome_major > 0) return "Google Inc.";
     return "";
 }
 
 pub fn getProduct(_: *const Navigator) []const u8 {
     return "Gecko";
+}
+
+pub fn getProductSub(_: *const Navigator) []const u8 {
+    return "20030107";
+}
+
+pub fn getVendorSub(_: *const Navigator) []const u8 {
+    return "";
 }
 
 fn getWebdriver(_: *const Navigator) bool {
@@ -135,6 +149,7 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
+    if (Persona.active) return Persona.get().navigatorPlatform();
     return switch (builtin.target.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
@@ -346,6 +361,8 @@ pub const JsApi = struct {
     pub const maxTouchPoints = bridge.accessor(Navigator.getMaxTouchPoints, null, .{});
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
+    pub const productSub = bridge.accessor(Navigator.getProductSub, null, .{});
+    pub const vendorSub = bridge.accessor(Navigator.getVendorSub, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});

@@ -493,16 +493,44 @@ pub fn getLanguages(self: *const Client) []const []const u8 {
     return (self.accept_language_override orelse self.network.config.http_headers.accept_language).languages;
 }
 
+pub const BaselineHeaders = struct {
+    items: [5]Transfer.RequestHeader = undefined,
+    len: usize = 0,
+
+    pub fn slice(self: *const BaselineHeaders) []const Transfer.RequestHeader {
+        return self.items[0..self.len];
+    }
+
+    fn add(self: *BaselineHeaders, hdr: Transfer.RequestHeader) void {
+        self.items[self.len] = hdr;
+        self.len += 1;
+    }
+};
+
 // Headers _all_ requests include.
-pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
-    return .{
-        .{ .name = "User-Agent", .value = self.getUserAgent() },
-        .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed },
-        .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed },
-        // Omitting Accept-Language triggers bot-protection on some CDNs
-        // (Akamai) when Accept-Encoding is present.
-        .{ .name = "Accept-Language", .value = self.getAcceptLanguage() },
-    };
+pub fn baselineHeaders(self: *const Client) BaselineHeaders {
+    var out: BaselineHeaders = .{};
+
+    // SellGravity antidetect: a Chrome persona sends exactly Chrome's default
+    // low-entropy client hints, in Chrome's order (before User-Agent). The
+    // full version list is a high-entropy hint Chrome only sends on request.
+    const persona = lp.Persona.get();
+    if (lp.Persona.active and persona.sec_ch_ua != null) {
+        out.add(.{ .name = "Sec-Ch-Ua", .value = persona.sec_ch_ua.?, .source = .fixed });
+        out.add(.{ .name = "Sec-Ch-Ua-Mobile", .value = persona.secChUaMobile(), .source = .fixed });
+        out.add(.{ .name = "Sec-Ch-Ua-Platform", .value = persona.sec_ch_ua_platform.?, .source = .fixed });
+        out.add(.{ .name = "User-Agent", .value = self.getUserAgent() });
+        out.add(.{ .name = "Accept-Language", .value = self.getAcceptLanguage() });
+        return out;
+    }
+
+    out.add(.{ .name = "User-Agent", .value = self.getUserAgent() });
+    out.add(.{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed });
+    out.add(.{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed });
+    // Omitting Accept-Language triggers bot-protection on some CDNs
+    // (Akamai) when Accept-Encoding is present.
+    out.add(.{ .name = "Accept-Language", .value = self.getAcceptLanguage() });
+    return out;
 }
 
 pub fn abort(self: *Client) void {
@@ -4384,7 +4412,8 @@ pub const Transfer = struct {
 
     // The client's baseline headers, added to every request at creation.
     fn seedHeaders(self: *Transfer) !void {
-        for (self.client.baselineHeaders()) |hdr| {
+        const baseline = self.client.baselineHeaders();
+        for (baseline.slice()) |hdr| {
             try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
         }
 

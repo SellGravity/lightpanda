@@ -25,6 +25,7 @@ const js = @import("../js/js.zig");
 const URL = @import("../URL.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const Persona = @import("../../Persona.zig");
 
 const Console = @import("Console.zig");
 const History = @import("History.zig");
@@ -891,16 +892,31 @@ fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
 
 // There is no window frame around the viewport and no window position on a
 // screen, so the outer size is the viewport and the position is 0.
+// SellGravity antidetect: a real window has a frame around the viewport
+// (tab strip + toolbar) and sits somewhere on the screen. outer == inner is a
+// classic headless tell.
 fn getOuterWidth(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().width;
+    const viewport = frame.page.getViewport();
+    if (!Persona.active) return viewport.width;
+    const p = Persona.get();
+    const extra = (p.outer_width orelse viewport.width) -| (p.inner_width orelse viewport.width);
+    return viewport.width + extra;
 }
 
 fn getOuterHeight(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().height;
+    const viewport = frame.page.getViewport();
+    if (!Persona.active) return viewport.height;
+    const p = Persona.get();
+    const extra = (p.outer_height orelse viewport.height) -| (p.inner_height orelse viewport.height);
+    return viewport.height + extra;
 }
 
-fn getScreenPosition(_: *const Window) i32 {
-    return 0;
+fn getScreenX(_: *const Window) i32 {
+    return if (Persona.active) Persona.get().screen_x else 0;
+}
+
+fn getScreenY(_: *const Window) i32 {
+    return if (Persona.active) Persona.get().screen_y else 0;
 }
 
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
@@ -1320,10 +1336,10 @@ pub const JsApi = struct {
     pub const devicePixelRatio = bridge.accessor(Window.getDevicePixelRatio, Window.setDevicePixelRatio, .{});
     pub const outerWidth = bridge.accessor(Window.getOuterWidth, Window.setOuterWidth, .{});
     pub const outerHeight = bridge.accessor(Window.getOuterHeight, Window.setOuterHeight, .{});
-    pub const screenX = bridge.accessor(Window.getScreenPosition, Window.setScreenX, .{});
-    pub const screenY = bridge.accessor(Window.getScreenPosition, Window.setScreenY, .{});
-    pub const screenLeft = bridge.accessor(Window.getScreenPosition, Window.setScreenLeft, .{});
-    pub const screenTop = bridge.accessor(Window.getScreenPosition, Window.setScreenTop, .{});
+    pub const screenX = bridge.accessor(Window.getScreenX, Window.setScreenX, .{});
+    pub const screenY = bridge.accessor(Window.getScreenY, Window.setScreenY, .{});
+    pub const screenLeft = bridge.accessor(Window.getScreenX, Window.setScreenLeft, .{});
+    pub const screenTop = bridge.accessor(Window.getScreenY, Window.setScreenTop, .{});
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});

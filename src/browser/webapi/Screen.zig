@@ -19,6 +19,7 @@
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const EventTarget = @import("EventTarget.zig");
+const Persona = @import("../../Persona.zig");
 
 pub fn registerTypes() []const type {
     return &.{
@@ -57,6 +58,14 @@ pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
     return viewport.screen_height orelse viewport.height;
 }
 
+// The screen minus what the OS reserves (taskbar / menu bar). Upstream
+// hardcoded 1040, which contradicts any screen that is not 1920x1080.
+fn getAvailHeight(self: *const Screen, frame: *Frame) u32 {
+    const height = self.getHeight(frame);
+    if (!Persona.active) return 1040;
+    return height -| Persona.get().avail_height_reserved;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Screen);
 
@@ -68,7 +77,9 @@ pub const JsApi = struct {
     pub const width = bridge.accessor(Screen.getWidth, null, .{});
     pub const height = bridge.accessor(Screen.getHeight, null, .{});
     pub const availWidth = bridge.accessor(Screen.getWidth, null, .{});
-    pub const availHeight = bridge.property(1040, .{ .template = false });
+    pub const availHeight = bridge.accessor(Screen.getAvailHeight, null, .{});
+    pub const availLeft = bridge.property(0, .{ .template = false });
+    pub const availTop = bridge.property(0, .{ .template = false });
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});

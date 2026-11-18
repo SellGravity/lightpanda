@@ -19,6 +19,7 @@
 const builtin = @import("builtin");
 
 const Config = @import("../../Config.zig");
+const Persona = @import("../../Persona.zig");
 const js = @import("../js/js.zig");
 const Execution = js.Execution;
 
@@ -26,17 +27,15 @@ const NavigatorUAData = @This();
 
 _pad: bool = false,
 
-const Brand = struct {
-    brand: []const u8,
-    version: []const u8,
-};
+// Same shape as Persona.Brand so persona brands are returned without copying.
+const Brand = Persona.Brand;
 
 fn getBrands(_: *const NavigatorUAData) []const Brand {
     return brandList();
 }
 
 fn getMobile(_: *const NavigatorUAData) bool {
-    return false;
+    return isMobile();
 }
 
 fn getPlatform(_: *const NavigatorUAData) []const u8 {
@@ -49,7 +48,7 @@ pub fn toJSON(_: *const NavigatorUAData) struct {
     platform: []const u8,
 } {
     return .{
-        .mobile = false,
+        .mobile = isMobile(),
         .brands = brandList(),
         .platform = uaPlatform(),
     };
@@ -61,6 +60,23 @@ fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, ex
     // also valid to just return everything.
 
     _ = hints;
+
+    if (personaActive()) {
+        const p = Persona.get();
+        return exec.js.local.?.resolvePromise(.{
+            .brands = brandList(),
+            .mobile = p.mobile,
+            .platform = p.uaPlatform(),
+            .architecture = p.uaArchitecture(),
+            .bitness = p.uaBitness(),
+            .model = p.model,
+            .platformVersion = p.platform_version,
+            .uaFullVersion = p.full_version,
+            .fullVersionList = p.brands_full[0..p.brand_count],
+            .wow64 = false,
+            .formFactors = if (p.mobile) [_][]const u8{"Mobile"} else [_][]const u8{"Desktop"},
+        });
+    }
 
     const brands = brandList();
 
@@ -79,7 +95,19 @@ fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, ex
     });
 }
 
+fn personaActive() bool {
+    return Persona.active and Persona.get().brand_count > 0;
+}
+
+fn isMobile() bool {
+    return Persona.active and Persona.get().mobile;
+}
+
 fn brandList() []const Brand {
+    if (personaActive()) {
+        const p = Persona.get();
+        return p.brands[0..p.brand_count];
+    }
     const out = comptime blk: {
         const src = &Config.HttpHeaders.brands;
         var arr: [src.len]Brand = undefined;
@@ -93,6 +121,7 @@ fn brandList() []const Brand {
 }
 
 fn uaPlatform() []const u8 {
+    if (Persona.active) return Persona.get().uaPlatform();
     return switch (builtin.target.os.tag) {
         .macos => "macOS",
         .windows => "Windows",

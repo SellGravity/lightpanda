@@ -236,7 +236,8 @@ pub fn setViewportOverride(self: *Browser, viewport: ?Viewport) void {
 }
 
 pub fn getViewport(self: *const Browser) Viewport {
-    return self.viewport_override orelse Viewport.default;
+    // SellGravity antidetect: launcher profiles start at the persona window.
+    return self.viewport_override orelse lp.Persona.get().defaultViewport();
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

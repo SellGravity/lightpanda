@@ -64,7 +64,10 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
     lp.malloc_tuning.apply();
     lp.crash_handler.attachSignalHandlers();
 
-    const args = Config.parseArgs(main_arena, proc_args) catch |err| switch (err) {
+    // SellGravity antidetect: InviBrowser passes Chromium-style switches;
+    // take them out and fill the process persona before Config sees argv.
+    const launch_args = try lp.Persona.translateArgs(main_arena, proc_args);
+    const args = Config.parseArgs(main_arena, launch_args) catch |err| switch (err) {
         // Already logged where they were found.
         error.UnknownCommand,
         error.UnknownOption,

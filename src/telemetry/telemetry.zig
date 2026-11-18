@@ -13,6 +13,12 @@ pub fn isDisabled() bool {
         return true;
     }
 
+    // SellGravity antidetect: a launcher profile never reports anything to
+    // Lightpanda's telemetry endpoint (it would tie profiles to one install id).
+    if (lp.Persona.active) {
+        return true;
+    }
+
     return std.c.getenv("LIGHTPANDA_DISABLE_TELEMETRY") != null;
 }
 
