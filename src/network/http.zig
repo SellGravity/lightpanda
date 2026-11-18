@@ -24,6 +24,10 @@ const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
 const libcurl = @import("../sys/libcurl.zig");
 const crypto = @import("../sys/libcrypto.zig");
+const chrome_tls = @import("chrome_tls.zig");
+
+/// vendor/curl/http2.c: Chrome HTTP/2 fingerprint switch (launcher profiles).
+extern var lp_h2_chrome: c_int;
 
 const IpFilter = @import("IpFilter.zig");
 const Certificates = @import("Certificates.zig");
@@ -534,6 +538,18 @@ pub const Connection = struct {
 
         if (config.httpCurves()) |list| {
             try libcurl.curl_easy_setopt(self._easy, .ssl_ec_curves, list.ptr);
+        }
+
+        // SellGravity antidetect: Chrome's ClientHello for launcher profiles
+        // (replaces the callback above; still installs the cert store).
+        if (lp.Persona.active) {
+            lp_h2_chrome = 1;
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_function, &chrome_tls.sslCtxFunction);
+            const data: *crypto.X509_STORE = if (config.tlsVerifyHost())
+                certificates.store
+            else
+                @ptrCast(&chrome_tls.no_store);
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_data, data);
         }
 
         if (config.httpDebug()) {
