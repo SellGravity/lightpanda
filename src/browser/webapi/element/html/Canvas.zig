@@ -75,7 +75,10 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
-            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
+            .webgl => |gl| if (gl._version == 2)
+                std.mem.eql(u8, context_type, "webgl2")
+            else
+                std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
         };
         return if (matches) cached else null;
     }
@@ -97,10 +100,9 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
         // (Three.js does) can degrade gracefully.
         // SellGravity antidetect: launcher profiles get a WebGL 1 context
         // reporting the persona GPU; a real Chrome never lacks WebGL.
-        if (WebGLRenderingContext.enabled() and
-            (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")))
-        {
-            const ctx = try WebGLRenderingContext.create(frame, self.getWidth(), self.getHeight());
+        if (WebGLRenderingContext.enabled() and isWebGL(context_type)) {
+            const version: u8 = if (std.mem.eql(u8, context_type, "webgl2")) 2 else 1;
+            const ctx = try WebGLRenderingContext.create(frame, self.getWidth(), self.getHeight(), version);
             break :blk .{ .webgl = ctx };
         }
 

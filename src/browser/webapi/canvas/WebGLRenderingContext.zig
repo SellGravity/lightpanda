@@ -47,6 +47,8 @@ const WebGLRenderingContext = @This();
 // later canvas resize only changes it on the next frame).
 _width: u32 = 300,
 _height: u32 = 150,
+// 1 for "webgl", 2 for "webgl2" (same object model, version-specific answers).
+_version: u8 = 1,
 
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
@@ -174,8 +176,8 @@ pub fn enabled() bool {
     return Persona.active;
 }
 
-pub fn create(frame: *Frame, width: u32, height: u32) !*WebGLRenderingContext {
-    return frame._factory.create(WebGLRenderingContext{ ._width = width, ._height = height });
+pub fn create(frame: *Frame, width: u32, height: u32, version: u8) !*WebGLRenderingContext {
+    return frame._factory.create(WebGLRenderingContext{ ._width = width, ._height = height, ._version = version });
 }
 
 const Param = union(enum) {
@@ -213,8 +215,8 @@ fn getParameter(self: *const WebGLRenderingContext, pname_value: ?f64) ?Param {
     return switch (pname) {
         0x1F00 => .{ .string = "WebKit" }, // VENDOR
         0x1F01 => .{ .string = "WebKit WebGL" }, // RENDERER
-        0x1F02 => .{ .string = "WebGL 1.0 (OpenGL ES 2.0 Chromium)" }, // VERSION
-        0x8B8C => .{ .string = "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)" }, // SHADING_LANGUAGE_VERSION
+        0x1F02 => .{ .string = if (self._version == 2) "WebGL 2.0 (OpenGL ES 3.0 Chromium)" else "WebGL 1.0 (OpenGL ES 2.0 Chromium)" }, // VERSION
+        0x8B8C => .{ .string = if (self._version == 2) "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)" else "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)" }, // SHADING_LANGUAGE_VERSION
         0x9245 => .{ .string = p.webgl_vendor }, // UNMASKED_VENDOR_WEBGL
         0x9246 => .{ .string = p.webgl_renderer }, // UNMASKED_RENDERER_WEBGL
 
@@ -272,6 +274,20 @@ fn getParameter(self: *const WebGLRenderingContext, pname_value: ?f64) ?Param {
         0x0CF5, 0x0D05 => .{ .int = 4 }, // UNPACK_ALIGNMENT, PACK_ALIGNMENT
         0x8B9A => .{ .int = 0x1908 }, // IMPLEMENTATION_COLOR_READ_FORMAT (RGBA)
         0x8B9B => .{ .int = 0x1401 }, // IMPLEMENTATION_COLOR_READ_TYPE (UNSIGNED_BYTE)
+        // WebGL2-only limits (Chrome/ANGLE desktop values).
+        0x8073 => if (self._version == 2) .{ .int = 2048 } else null, // MAX_3D_TEXTURE_SIZE
+        0x88FF => if (self._version == 2) .{ .int = 2048 } else null, // MAX_ARRAY_TEXTURE_LAYERS
+        0x8824 => .{ .int = 8 }, // MAX_DRAW_BUFFERS
+        0x8CDF => .{ .int = 8 }, // MAX_COLOR_ATTACHMENTS
+        0x8D57 => if (self._version == 2) .{ .int = if (class == .mobile) 4 else 16 } else null, // MAX_SAMPLES
+        0x8A2F => if (self._version == 2) .{ .int = 24 } else null, // MAX_UNIFORM_BUFFER_BINDINGS
+        0x8A30 => if (self._version == 2) .{ .int = 65536 } else null, // MAX_UNIFORM_BLOCK_SIZE
+        0x8B4B => if (self._version == 2) .{ .int = 120 } else null, // MAX_VERTEX_OUTPUT_COMPONENTS
+        0x9125 => if (self._version == 2) .{ .int = 120 } else null, // MAX_FRAGMENT_INPUT_COMPONENTS
+        0x8C8A => if (self._version == 2) .{ .int = 4 } else null, // MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS
+        0x8905 => if (self._version == 2) .{ .int = 7 } else null, // MAX_PROGRAM_TEXEL_OFFSET
+        0x8904 => if (self._version == 2) .{ .int = -8 } else null, // MIN_PROGRAM_TEXEL_OFFSET
+        0x8D6B => if (self._version == 2) .{ .int = 4294967294 } else null, // MAX_ELEMENT_INDEX
         else => null,
     };
 }
@@ -279,7 +295,22 @@ fn getParameter(self: *const WebGLRenderingContext, pname_value: ?f64) ?Param {
 /// Extensions exposed per GPU class, in Chrome's order. ASTC/ETC/PVRTC only
 /// exist on mobile GPUs, S3TC/BPTC/RGTC only on desktop ones: a Windows
 /// persona listing ETC is an instant mismatch.
-fn supportedExtensions() []const []const u8 {
+fn supportedExtensions(version: u8) []const []const u8 {
+    // Chrome's WebGL2 list (desktop ANGLE); mobile reuses the WebGL1 one.
+    const webgl2_desktop = [_][]const u8{
+        "EXT_clip_control",                      "EXT_color_buffer_float",       "EXT_color_buffer_half_float",
+        "EXT_conservative_depth",                "EXT_depth_clamp",              "EXT_disjoint_timer_query_webgl2",
+        "EXT_float_blend",                       "EXT_polygon_offset_clamp",     "EXT_render_snorm",
+        "EXT_texture_compression_bptc",          "EXT_texture_compression_rgtc", "EXT_texture_filter_anisotropic",
+        "EXT_texture_mirror_clamp_to_edge",      "EXT_texture_norm16",           "KHR_parallel_shader_compile",
+        "NV_shader_noperspective_interpolation", "OES_draw_buffers_indexed",     "OES_sample_variables",
+        "OES_shader_multisample_interpolation",  "OES_texture_float_linear",     "OVR_multiview2",
+        "WEBGL_blend_func_extended",             "WEBGL_clip_cull_distance",     "WEBGL_compressed_texture_s3tc",
+        "WEBGL_compressed_texture_s3tc_srgb",    "WEBGL_debug_renderer_info",    "WEBGL_debug_shaders",
+        "WEBGL_lose_context",                    "WEBGL_multi_draw",             "WEBGL_polygon_mode",
+        "WEBGL_provoking_vertex",                "WEBGL_stencil_texturing",
+    };
+    if (Persona.active and version == 2 and gpuClass() != .mobile) return &webgl2_desktop;
     const desktop = [_][]const u8{
         "ANGLE_instanced_arrays",             "EXT_blend_minmax",                 "EXT_clip_control",
         "EXT_color_buffer_half_float",        "EXT_depth_clamp",                  "EXT_disjoint_timer_query",
@@ -329,16 +360,16 @@ fn supportedExtensions() []const []const u8 {
     };
 }
 
-fn isSupported(name: []const u8) bool {
-    for (supportedExtensions()) |ext| {
+fn isSupported(name: []const u8, version: u8) bool {
+    for (supportedExtensions(version)) |ext| {
         if (std.ascii.eqlIgnoreCase(ext, name)) return true;
     }
     return false;
 }
 
 /// Enables a WebGL extension.
-fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
-    if (!isSupported(name)) return null;
+fn getExtension(self: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
+    if (!isSupported(name, self._version)) return null;
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
@@ -355,8 +386,8 @@ fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame
 }
 
 /// Returns a list of all the supported WebGL extensions.
-fn getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u8 {
-    return supportedExtensions();
+fn getSupportedExtensions(self: *const WebGLRenderingContext) []const []const u8 {
+    return supportedExtensions(self._version);
 }
 
 const ContextAttributes = struct {

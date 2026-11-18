@@ -9,6 +9,15 @@
     // devicePosture only ships on foldable-capable (Android) builds.
     delete N.devicePosture;
   }
+  // getContext('webgl2') hands out the same native context class with WebGL2
+  // answers; expose the constructor name so `instanceof` checks hold.
+  if (typeof window !== 'undefined' && typeof WebGL2RenderingContext === 'undefined' && typeof WebGLRenderingContext !== 'undefined') {
+    function WebGL2RenderingContext() { throw new TypeError('Illegal constructor'); }
+    WebGL2RenderingContext.prototype = WebGLRenderingContext.prototype;
+    const ctor = WebGL2RenderingContext.bind(null);
+    Object.defineProperty(ctor, 'name', { value: 'WebGL2RenderingContext' });
+    Object.defineProperty(window, 'WebGL2RenderingContext', { value: ctor, writable: true, configurable: true, enumerable: false });
+  }
   if (typeof window === 'undefined' || 'chrome' in window) return;
   const native = (fn, name, len) => {
     const b = fn.bind(null);

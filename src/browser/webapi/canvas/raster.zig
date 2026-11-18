@@ -576,15 +576,15 @@ pub fn measure(renderer: *screenshot.Renderer, str: []const u8, state: *const co
     if (fonts.resolve(fonts.familyFromShorthand(state.font()))) |r| width *= r.factor;
     const p = Persona.get();
     if (Persona.active and p.fonts_noise and width > 0) {
-        // Sub-pixel, stable per (profile, font, text): font-enumeration by
-        // width comparison still works, but the exact widths differ per profile.
-        var key_buf: [512]u8 = undefined;
-        const font = state.font();
-        const n = @min(font.len, 256);
-        @memcpy(key_buf[0..n], font[0..n]);
-        const m = @min(str.len, key_buf.len - n);
-        @memcpy(key_buf[n..][0..m], str[0..m]);
-        width += p.noiseOffset(Persona.salt_fonts, key_buf[0 .. n + m], width * 0.0006);
+        // Sub-pixel, stable per (profile, resolved face, text). Keyed on the
+        // exact un-noised width, not the font string: "'NoSuchFont',
+        // monospace" resolves to monospace and must measure exactly like it,
+        // or every probed font would look installed.
+        var key_buf: [8 + 256]u8 = undefined;
+        @memcpy(key_buf[0..8], std.mem.asBytes(&width));
+        const m = @min(str.len, key_buf.len - 8);
+        @memcpy(key_buf[8..][0..m], str[0..m]);
+        width += p.noiseOffset(Persona.salt_fonts, key_buf[0 .. 8 + m], width * 0.0006);
     }
     return .{ width, out[1], out[2] };
 }

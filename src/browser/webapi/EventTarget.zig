@@ -29,6 +29,7 @@ const Node = @import("Node.zig");
 const Event = @import("Event.zig");
 const Screen = @import("Screen.zig");
 const NavigatorExtras = @import("NavigatorExtras.zig");
+const RTCPeerConnection = @import("RTCPeerConnection.zig");
 const Worker = @import("Worker.zig");
 const Window = @import("Window.zig");
 const FileReader = @import("FileReader.zig");
@@ -113,6 +114,7 @@ pub const Type = enum(u8) {
     payment_request,
     payment_response,
     performance,
+    rtc_peer_connection,
     permission_status,
     screen,
     screen_orientation,
@@ -165,6 +167,7 @@ pub fn Subtype(comptime tag: Type) type {
         .payment_request => PaymentRequest,
         .payment_response => PaymentResponse,
         .performance => Performance,
+        .rtc_peer_connection => RTCPeerConnection,
         .permission_status => Permissions.PermissionStatus,
         .screen => Screen,
         .screen_orientation => Screen.Orientation,
@@ -427,6 +430,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .text_track_list => writer.writeAll("<TextTrackList>"),
         .navigation => writer.writeAll("<Navigation>"),
         .screen => writer.writeAll("<Screen>"),
+        .rtc_peer_connection => writer.writeAll("<RTCPeerConnection>"),
         .battery_manager => writer.writeAll("<BatteryManager>"),
         .media_devices => writer.writeAll("<MediaDevices>"),
         .network_information => writer.writeAll("<NetworkInformation>"),
@@ -477,6 +481,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .performance => return "[object Performance]",
         .permission_status => return "[object PermissionStatus]",
         .screen => return "[object Screen]",
+        .rtc_peer_connection => return "[object RTCPeerConnection]",
         .battery_manager => return "[object BatteryManager]",
         .media_devices => return "[object MediaDevices]",
         .network_information => return "[object NetworkInformation]",

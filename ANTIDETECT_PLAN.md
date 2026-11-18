@@ -14,7 +14,9 @@ InviPanda là một engine **headless, nhẹ** (mỗi profile ~20–120 MB RAM) 
 | JA3 | Đổi theo từng kết nối (permute extension), giống Chrome |
 | CDP e2e từ Windows qua WSL | Mọi lệnh launcher dùng (Target/Page/Runtime/DOM/Input/Network) đều OK |
 | Canvas | Vẽ pixel thật. Hash khác nhau giữa các profile, ổn định trong cùng một profile |
-| Font | Persona Windows thấy font Windows, Mac thấy font Mac. `--font-exclusion-list` hoạt động |
+| Font | Persona Windows thấy font Windows, Mac thấy font Mac. `--font-exclusion-list` hoạt động, kể cả khi bật `--fonts-noise` |
+| WebGL / WebGL2 | Cả hai context đều có. VERSION/GLSL, tham số và extension giống Chrome. `instanceof WebGL2RenderingContext` đúng |
+| Bản release qua launcher | `wsl.exe -e /opt/invipanda/invipanda` + bộ flag của `chromium-flags.builder.ts` (gồm `--load-extension`, URL khởi động): CDP sẵn sàng sau ~3,8 s, persona đầy đủ |
 
 ## 2. Hợp đồng với launcher
 
@@ -52,7 +54,7 @@ Switch được hỗ trợ:
 | Global | Gỡ `globalPrivacyControl` / `modelContext`. Thêm `window.chrome` (app/csi/loadTimes, toString là `[native code]`). Persona mobile gỡ API chỉ desktop có | persona_bootstrap.js |
 | Màn hình / cửa sổ | screen, availHeight (trừ taskbar), outer > inner (khung trình duyệt), screenX/Y, DPR, mobile | Screen.zig, Window.zig, Browser.zig |
 | Media query | pointer/hover, color-gamut, color, prefers-*, forced-colors, dynamic-range, device-* lấy theo màn hình, resolution / -webkit-device-pixel-ratio | css/MediaQuery.zig |
-| WebGL | Context WebGL1 với bảng `getParameter` theo nhóm GPU (desktop/Apple/mobile), extension theo đúng thứ tự Chrome, precision format, các object GL | canvas/WebGLRenderingContext.zig |
+| WebGL | Context WebGL1 và WebGL2 với bảng `getParameter` theo nhóm GPU (desktop/Apple/mobile), extension theo đúng thứ tự Chrome, precision format, các object GL | canvas/WebGLRenderingContext.zig |
 | Canvas 2D | **Raster thật** bằng tiny-skia: path, arc, chữ, gradient, 26 chế độ composite, putImageData. PNG đúng kích thước | canvas/raster.zig, rust/render/canvas.rs |
 | Nhiễu | canvas (pixel theo seed), fonts (measureText), rects (getBoundingClientRect), audio (OfflineAudioContext) | raster.zig, Element.zig, Persona.zig |
 | Font | Danh sách font theo OS, metric riêng cho từng font, fallback theo đúng CSS, `--font-exclusion-list` | fonts.zig, layout.zig |
@@ -62,11 +64,10 @@ Switch được hỗ trợ:
 ## 4. Giới hạn còn lại
 
 1. **Pixel không giống hệt Chrome thật**: font DejaVu và cách khử răng cưa của tiny-skia khác Skia. Hash canvas là duy nhất cho từng profile, nhưng không trùng hash của "một máy Windows thật" nào.
-2. **WebGL2**: `getContext('webgl2')` trả `null`, trong khi Chrome desktop luôn có.
-3. **Layout xấp xỉ**: không có engine layout thật; vị trí, kích thước phần tử là ước lượng.
-4. **Không có WebRTC, speechSynthesis**: thiếu API chứ không rò IP.
-5. **Không có bản Windows native**: chạy qua WSL2 (hoặc Docker).
-6. Timezone: `Intl.resolvedOptions().timeZone` trả tên canonical của ICU (ví dụ `Asia/Saigon`), giống V8 cùng thế hệ.
+2. **Layout xấp xỉ**: không có engine layout thật; vị trí, kích thước phần tử là ước lượng.
+3. **Không có WebRTC, speechSynthesis**: thiếu API chứ không rò IP.
+4. **Không có bản Windows native**: chạy qua WSL2 (hoặc Docker).
+5. Timezone: `Intl.resolvedOptions().timeZone` trả tên canonical của ICU (ví dụ `Asia/Saigon`), giống V8 cùng thế hệ.
 
 ## 5. Tích hợp vào InviBrowser
 
