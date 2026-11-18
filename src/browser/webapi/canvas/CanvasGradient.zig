@@ -17,21 +17,43 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
+const color = @import("../../color.zig");
 
 const Execution = js.Execution;
 
-/// Nothing is painted, so a gradient only has to exist and accept stops.
+/// A gradient keeps its geometry and stops so the SellGravity canvas
+/// rasterizer (raster.zig) can paint it.
 const CanvasGradient = @This();
 
-_stops: u32 = 0,
+pub const Stop = struct {
+    offset: f64,
+    color: color.RGBA,
+};
+
+const max_stops = 16;
+
+/// 0 none (conic: painted as its first stop), 1 linear, 2 radial.
+_kind: u32 = 0,
+/// linear: x0 y0 x1 y1; radial: x0 y0 r0 x1 y1 r1.
+_coords: [6]f64 = @splat(0),
+_stops: [max_stops]Stop = undefined,
+_stops_len: u8 = 0,
 
 pub fn init(exec: *const Execution) !*CanvasGradient {
     return exec._factory.create(CanvasGradient{});
 }
 
-fn addColorStop(self: *CanvasGradient, offset: f64, _: []const u8) !void {
+pub fn initGeometry(kind: u32, coords: [6]f64, exec: *const Execution) !*CanvasGradient {
+    return exec._factory.create(CanvasGradient{ ._kind = kind, ._coords = coords });
+}
+
+fn addColorStop(self: *CanvasGradient, offset: f64, value: []const u8) !void {
     if (!(offset >= 0 and offset <= 1)) return error.IndexSizeError;
-    self._stops += 1;
+    const c = color.parseCanvasColor(value) orelse return error.SyntaxError;
+    if (self._stops_len < max_stops) {
+        self._stops[self._stops_len] = .{ .offset = offset, .color = c };
+        self._stops_len += 1;
+    }
 }
 
 pub const JsApi = struct {

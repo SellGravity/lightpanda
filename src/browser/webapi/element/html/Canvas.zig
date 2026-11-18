@@ -36,6 +36,7 @@ const js = lp.js;
 const log = lp.log;
 const Execution = js.Execution;
 const BlankPNG = OffscreenCanvas.BlankPNG;
+const raster = @import("../../canvas/raster.zig");
 
 const Canvas = @This();
 
@@ -128,16 +129,44 @@ fn hasBitmap(self: *const Canvas) bool {
 /// Serializes the canvas, always as the blank PNG. Per spec an unsupported
 /// `type` falls back to image/png, and with nothing drawn there is no lossy
 /// encoding for `quality` to control, so both arguments are ignored.
-fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64) []const u8 {
+fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64, exec: *const Execution) ![]const u8 {
+    // SellGravity antidetect: the real pixels (drawn ops + profile noise) at
+    // the canvas size, like Chrome; upstream returns a 1x1 blank PNG.
+    if (try self.personaPixels(exec)) |px| {
+        return raster.dataUrl(exec.call_arena, px, self.getWidth(), self.getHeight());
+    }
     // Per spec, a canvas with no pixels serializes to this exact string.
     return if (self.hasBitmap()) BlankPNG.data_url else "data:,";
+}
+
+/// Launcher profiles only: the canvas pixels as straight RGBA, or null to
+/// keep upstream behaviour (no persona, no bitmap, or too large to encode).
+fn personaPixels(self: *const Canvas, exec: *const Execution) !?[]u8 {
+    if (!lp.Persona.active or !self.hasBitmap()) return null;
+    const w = self.getWidth();
+    const h = self.getHeight();
+    if (@as(u64, w) * h > 4096 * 4096) return null;
+    if (self._cached) |cached| switch (cached) {
+        .@"2d" => |ctx| if (try ctx.renderPixels(exec.call_arena, exec, w, h)) |px| return px,
+        .webgl => {},
+    };
+    const out = try exec.call_arena.alloc(u8, @as(usize, w) * h * 4);
+    @memset(out, 0);
+    return out;
 }
 
 /// Same image as `toDataURL`, handed to `callback` as a Blob from a task.
 /// A canvas with no pixels calls back with null, per spec.
 pub fn toBlob(self: *const Canvas, callback: js.Function.Global, _: ?[]const u8, _: ?f64, exec: *Execution) !void {
+    // SellGravity antidetect: encode now (the spec snapshots the bitmap at
+    // call time), deliver from the task.
+    var png: ?[]const u8 = null;
+    if (try self.personaPixels(exec)) |px| {
+        png = try raster.pngBytes(exec.page_arena, px, self.getWidth(), self.getHeight());
+    }
     const task = try exec._factory.create(ToBlobCallback{
         .exec = exec,
+        .png = png,
         // The spec checks the bitmap now, not when the task runs.
         .has_bitmap = self.hasBitmap(),
         .callback = callback,
@@ -153,6 +182,7 @@ pub fn toBlob(self: *const Canvas, callback: js.Function.Global, _: ?[]const u8,
 const ToBlobCallback = struct {
     exec: *Execution,
     has_bitmap: bool,
+    png: ?[]const u8 = null,
     callback: js.Function.Global,
 
     fn cancelled(ctx: *anyopaque) void {
@@ -172,7 +202,7 @@ const ToBlobCallback = struct {
 
         var blob: ?*Blob = null;
         if (self.has_bitmap) {
-            const b = try BlankPNG.blob(exec);
+            const b = if (self.png) |bytes| try Blob.initFromBytes(bytes, "image/png", exec) else try BlankPNG.blob(exec);
             // The page can hold on to the Blob, in which case the JS wrapper
             // takes its own ref; ours only has to cover the call.
             b.acquireRef();

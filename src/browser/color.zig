@@ -1148,3 +1148,39 @@ test "color: invalid and unsupported" {
         };
     }
 }
+
+/// Any CSS color a canvas accepts (hex, named, rgb()/rgba(), hsl(), hwb())
+/// as 8-bit RGBA; null when invalid or unsupported. RGBA.parse only knows hex
+/// and named colors, which left `fillStyle = "rgba(...)"` silently ignored.
+pub fn parseCanvasColor(input: []const u8) ?RGBA {
+    if (RGBA.parse(input)) |c| return c else |_| {}
+    const parsed = parse(std.mem.trim(u8, input, &std.ascii.whitespace));
+    const value = switch (parsed) {
+        .value => |v| v,
+        else => return null,
+    };
+    const rgb: Rgb = switch (value) {
+        .named => |n| n.rgb,
+        .rgb => |r| r,
+        .missing => |m| switch (m.function) {
+            .rgb => .{ .r = m.channels[0] orelse 0, .g = m.channels[1] orelse 0, .b = m.channels[2] orelse 0, .alpha = m.alpha orelse 0 },
+            else => return null,
+        },
+        .keyword => return null,
+    };
+    return .{
+        .r = channelByte(rgb.r),
+        .g = channelByte(rgb.g),
+        .b = channelByte(rgb.b),
+        .a = channelByte(rgb.alpha * 255),
+    };
+}
+
+test "color: parseCanvasColor" {
+    const c = parseCanvasColor("rgba(102, 204, 0, 0.2)").?;
+    try std.testing.expectEqual(@as(u8, 102), c.r);
+    try std.testing.expectEqual(@as(u8, 204), c.g);
+    try std.testing.expectEqual(@as(u8, 51), c.a);
+    try std.testing.expect(parseCanvasColor("hsl(120, 100%, 50%)") != null);
+    try std.testing.expect(parseCanvasColor("nope(1)") == null);
+}

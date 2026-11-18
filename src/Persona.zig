@@ -886,3 +886,20 @@ test "Persona: client hints only on trustworthy origins" {
     try testing.expect(!isTrustworthyUrl("http://example.com/"));
     try testing.expect(!isTrustworthyUrl("http://localhost.evil.com/"));
 }
+
+/// --audio-noise: scale every non-silent sample by 1 ± ~1e-7, stable per
+/// (profile, sample index). Audio fingerprints sum rendered samples, so the
+/// hash changes per profile while the sound is unchanged.
+pub fn audioNoise(self: *const Persona, samples: []f32) void {
+    if (!active or !self.audio_noise) return;
+    const base = self.seed ^ salt_audio;
+    for (samples, 0..) |*s, i| {
+        if (s.* == 0) continue;
+        var z = (base +% i) +% 0x9E3779B97F4A7C15;
+        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
+        z ^= z >> 31;
+        const unit = @as(f32, @floatFromInt(z >> 40)) / @as(f32, @floatFromInt(@as(u64, 1) << 24));
+        s.* *= 1.0 + (unit * 2.0 - 1.0) * 1.0e-7;
+    }
+}

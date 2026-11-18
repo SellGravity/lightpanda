@@ -305,6 +305,13 @@ fn complete(self: *OfflineAudioContext) void {
     base.setState(.closed);
 
     const buffer = self._rendered.?;
+    // SellGravity antidetect: per-profile audio fingerprint (--audio-noise).
+    if (lp.Persona.active and lp.Persona.get().audio_noise) {
+        var nls: js.Local.Scope = undefined;
+        frame.js.localScope(&nls);
+        defer nls.deinit();
+        for (0..self._channels) |c| lp.Persona.get().audioNoise(buffer.channelData(c, &nls.local));
+    }
     const target = base.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, "complete")) blk: {
         const event = OfflineAudioCompletionEvent.initTrusted(buffer, frame.page) catch |err| {

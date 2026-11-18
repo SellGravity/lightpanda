@@ -39,6 +39,9 @@ use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
 use tiny_skia::{Color, FillRule, IntRect, Paint, PathBuilder, Pixmap, Rect, Transform};
 
+// SellGravity antidetect: Canvas 2D rasterizer.
+mod canvas;
+
 // ---------------------------------------------------------------------------
 // C ABI — mirrored by src/browser/screenshot.zig.
 

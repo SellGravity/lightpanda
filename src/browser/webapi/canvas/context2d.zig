@@ -131,7 +131,7 @@ pub const State = struct {
                 // straight through `style` writes the tag before the payload,
                 // so an early return from inside it leaves a `.color` with
                 // no colour.
-                const parsed = color.RGBA.parse(c) catch return;
+                const parsed = color.parseCanvasColor(c) orelse return;
                 style.* = .{ .color = parsed };
             },
         }

@@ -1779,7 +1779,7 @@ fn documentOrigin(self: *Element, frame: *Frame) layout.Origin {
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
-    return DOMRect.create(self.boundingClientRectValues(frame), frame._factory);
+    return DOMRect.create(rectsNoise(self.boundingClientRectValues(frame)), frame._factory);
 }
 
 // Plain rect values, no JS-backed allocation: the internal fast path shared by
@@ -1814,12 +1814,23 @@ pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     };
 }
 
+/// SellGravity antidetect (--rects-noise): one sub-pixel scale factor per
+/// profile, applied at the JS boundary only (IntersectionObserver and
+/// internal layout use the exact values), so geometry stays consistent while
+/// rect-based fingerprints differ across profiles.
+fn rectsNoise(d: DOMRect.Data) DOMRect.Data {
+    const p = lp.Persona.get();
+    if (!lp.Persona.active or !p.rects_noise) return d;
+    const k = 1.0 + p.noiseOffset(lp.Persona.salt_rects, "scale", 4.0e-6);
+    return .{ .x = d.x * k, .y = d.y * k, .width = d.width * k, .height = d.height * k };
+}
+
 pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
     if (!self.isVisible(frame)) {
         return &.{};
     }
     const rects = try frame.local_arena.alloc(*DOMRect, 1);
-    rects[0] = try DOMRect.create(self.boundingClientRectValuesForVisible(frame), frame._factory);
+    rects[0] = try DOMRect.create(rectsNoise(self.boundingClientRectValuesForVisible(frame)), frame._factory);
     return rects;
 }
 
