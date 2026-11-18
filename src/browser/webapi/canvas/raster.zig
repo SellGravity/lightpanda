@@ -25,6 +25,7 @@ const screenshot = @import("../../screenshot.zig");
 const Persona = @import("../../../Persona.zig");
 const CanvasGradient = @import("CanvasGradient.zig");
 const context2d = @import("context2d.zig");
+const fonts = @import("../../fonts.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -435,7 +436,16 @@ pub const Recorder = struct {
         const t = try self.allocator.dupe(u8, str);
         op.text = t.ptr;
         op.text_len = t.len;
-        op.text_flags = fontFlags(state.font());
+        op.text_flags = personaFontFlags(state.font());
+        // The persona face's metrics: stretch horizontally around (x, y).
+        if (fonts.resolve(fonts.familyFromShorthand(state.font()))) |r| {
+            const k = r.factor;
+            const m = paint.ctm;
+            op.transform[0] = @floatCast(m[0] * k);
+            op.transform[1] = @floatCast(m[1] * k);
+            op.transform[4] = @floatCast(m[0] * (x - k * x) + m[4]);
+            op.transform[5] = @floatCast(m[1] * (x - k * x) + m[5]);
+        }
         op.rect = .{ @floatCast(x), @floatCast(y), if (max_width) |m| @floatCast(m) else 0, @floatCast(state.font_size) };
         try self.push(op);
     }
@@ -492,6 +502,21 @@ pub fn packColor(c: color.RGBA) u32 {
     return (@as(u32, c.r) << 24) | (@as(u32, c.g) << 16) | (@as(u32, c.b) << 8) | c.a;
 }
 
+/// fontFlags, with the face (serif / mono / sans) the persona's font list
+/// resolves the family to.
+pub fn personaFontFlags(font: []const u8) u32 {
+    var flags = fontFlags(font);
+    if (fonts.resolve(fonts.familyFromShorthand(font))) |r| {
+        flags &= ~(text_mono | text_serif);
+        switch (r.generic) {
+            .mono => flags |= text_mono,
+            .serif => flags |= text_serif,
+            .sans => {},
+        }
+    }
+    return flags;
+}
+
 /// bold / italic / generic family out of a CSS font shorthand.
 pub fn fontFlags(font: []const u8) u32 {
     var flags: u32 = 0;
@@ -546,8 +571,9 @@ pub fn applyNoise(rgba: []u8) void {
 /// no renderer is available (caller falls back to the estimate).
 pub fn measure(renderer: *screenshot.Renderer, str: []const u8, state: *const context2d.State) ?[3]f64 {
     var out: [3]f32 = undefined;
-    if (lp_canvas_measure(renderer, str.ptr, str.len, @floatCast(state.font_size), fontFlags(state.font()), &out) != 0) return null;
+    if (lp_canvas_measure(renderer, str.ptr, str.len, @floatCast(state.font_size), personaFontFlags(state.font()), &out) != 0) return null;
     var width: f64 = out[0];
+    if (fonts.resolve(fonts.familyFromShorthand(state.font()))) |r| width *= r.factor;
     const p = Persona.get();
     if (Persona.active and p.fonts_noise and width > 0) {
         // Sub-pixel, stable per (profile, font, text): font-enumeration by

@@ -6639,6 +6639,21 @@ fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
     return self.computedFontSizeAt(parent, depth + 1);
 }
 
+/// SellGravity antidetect: the inline-style font-family an element inherits
+/// (the scope computedFontSize resolves), for persona font metrics.
+pub fn computedFontFamily(self: *StyleManager, element: ?*Element) ?[]const u8 {
+    var current = element;
+    var depth: u8 = 0;
+    while (current) |el| : (depth += 1) {
+        if (depth >= MAX_FONT_ANCESTOR_DEPTH) return null;
+        if (self.inlineStyleValue(el, .@"font-family")) |v| {
+            if (!inheritsKeyword(v)) return v;
+        }
+        current = el.asNode().flatTreeParentElement(self.frame);
+    }
+    return null;
+}
+
 /// `inherit`, or `unset` on an inherited property.
 fn inheritsKeyword(value: []const u8) bool {
     return std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset");

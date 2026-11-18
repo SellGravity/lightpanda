@@ -105,6 +105,8 @@ location_mode: LocationMode = .default,
 latitude: ?f64 = null,
 longitude: ?f64 = null,
 media_device_count: [3]u8 = .{ 1, 1, 1 }, // audioinput, videoinput, audiooutput
+/// --font-exclusion-list: families this profile does not have.
+font_exclusion: ?[]const u8 = null,
 
 pub fn get() *const Persona {
     return &current;
@@ -252,6 +254,7 @@ const Raw = struct {
     location_mode: ?[]const u8 = null,
     timezone: ?[]const u8 = null,
     lang: ?[]const u8 = null,
+    font_exclusion: ?[]const u8 = null,
     proxy_server: ?[]const u8 = null,
     port: ?[]const u8 = null,
     address: ?[]const u8 = null,
@@ -262,9 +265,58 @@ const Raw = struct {
     rects_noise: bool = false,
 };
 
+/// Launcher switch -> Raw field, for switches that carry a value.
+const value_switches = [_]struct { []const u8, []const u8 }{
+    .{ "user-agent", "user_agent" },
+    .{ "ua-full-version", "ua_full_version" },
+    .{ "ua-platform-version", "ua_platform_version" },
+    .{ "hardware-concurrency", "hardware_concurrency" },
+    .{ "device-memory", "device_memory" },
+    .{ "device-mode", "device_mode" },
+    .{ "device-size", "device_size" },
+    .{ "window-size", "window_size" },
+    .{ "screen-size", "screen_size" },
+    .{ "window-position", "window_position" },
+    .{ "window-scale", "window_scale" },
+    .{ "force-device-scale-factor", "window_scale" },
+    .{ "max-touch-points", "max_touch_points" },
+    .{ "webgl-vendor", "webgl_vendor" },
+    .{ "webgl-renderer", "webgl_renderer" },
+    .{ "fp-seed", "fp_seed" },
+    .{ "font-exclusion-list", "font_exclusion" },
+    .{ "media-device-count", "media_device_count" },
+    .{ "webrtc-mode", "webrtc_mode" },
+    .{ "location-mode", "location_mode" },
+    .{ "timezone", "timezone" },
+    .{ "lang", "lang" },
+    .{ "accept-lang", "lang" },
+    .{ "proxy-server", "proxy_server" },
+    .{ "remote-debugging-port", "port" },
+    .{ "remote-debugging-address", "address" },
+    .{ "user-data-dir", "user_data_dir" },
+};
+
+/// Launcher flag switch -> Raw bool field.
+const flag_switches = [_]struct { []const u8, []const u8 }{
+    .{ "canvas-noise", "canvas_noise" },
+    .{ "audio-noise", "audio_noise" },
+    .{ "fonts-noise", "fonts_noise" },
+    .{ "rects-noise", "rects_noise" },
+};
+
 fn store(raw: *Raw, name: []const u8, value: ?[]const u8) void {
-    const v = value orelse "";
-    if (std.mem.eql(u8, name, "user-agent")) raw.user_agent = v else if (std.mem.eql(u8, name, "ua-full-version")) raw.ua_full_version = v else if (std.mem.eql(u8, name, "ua-platform-version")) raw.ua_platform_version = v else if (std.mem.eql(u8, name, "hardware-concurrency")) raw.hardware_concurrency = v else if (std.mem.eql(u8, name, "device-memory")) raw.device_memory = v else if (std.mem.eql(u8, name, "device-mode")) raw.device_mode = v else if (std.mem.eql(u8, name, "device-size")) raw.device_size = v else if (std.mem.eql(u8, name, "window-size")) raw.window_size = v else if (std.mem.eql(u8, name, "screen-size")) raw.screen_size = v else if (std.mem.eql(u8, name, "window-position")) raw.window_position = v else if (std.mem.eql(u8, name, "window-scale") or std.mem.eql(u8, name, "force-device-scale-factor")) raw.window_scale = v else if (std.mem.eql(u8, name, "max-touch-points")) raw.max_touch_points = v else if (std.mem.eql(u8, name, "webgl-vendor")) raw.webgl_vendor = v else if (std.mem.eql(u8, name, "webgl-renderer")) raw.webgl_renderer = v else if (std.mem.eql(u8, name, "fp-seed")) raw.fp_seed = v else if (std.mem.eql(u8, name, "media-device-count")) raw.media_device_count = v else if (std.mem.eql(u8, name, "webrtc-mode")) raw.webrtc_mode = v else if (std.mem.eql(u8, name, "location-mode")) raw.location_mode = v else if (std.mem.eql(u8, name, "timezone")) raw.timezone = v else if (std.mem.eql(u8, name, "lang") or std.mem.eql(u8, name, "accept-lang")) raw.lang = v else if (std.mem.eql(u8, name, "proxy-server")) raw.proxy_server = v else if (std.mem.eql(u8, name, "remote-debugging-port")) raw.port = v else if (std.mem.eql(u8, name, "remote-debugging-address")) raw.address = v else if (std.mem.eql(u8, name, "user-data-dir")) raw.user_data_dir = v else if (std.mem.eql(u8, name, "canvas-noise")) raw.canvas_noise = true else if (std.mem.eql(u8, name, "audio-noise")) raw.audio_noise = true else if (std.mem.eql(u8, name, "fonts-noise")) raw.fonts_noise = true else if (std.mem.eql(u8, name, "rects-noise")) raw.rects_noise = true;
+    inline for (value_switches) |s| {
+        if (std.mem.eql(u8, name, s[0])) {
+            @field(raw, s[1]) = value orelse "";
+            return;
+        }
+    }
+    inline for (flag_switches) |s| {
+        if (std.mem.eql(u8, name, s[0])) {
+            @field(raw, s[1]) = true;
+            return;
+        }
+    }
 }
 
 /// Rewrites a launcher-style argv into a Lightpanda argv and fills `current`.
@@ -287,7 +339,10 @@ pub fn translateArgs(allocator: Allocator, proc_args: std.process.Args) !std.pro
         if (i == 1 and isCommand(arg)) has_command = true;
 
         const parsed = splitSwitch(arg) orelse {
-            try out.append(allocator, argv[i]);
+            // Launcher mode (no subcommand): startup URLs have no meaning for
+            // the CDP server; Chromium-only switches neither. Keep only what
+            // was translated, so an unknown launcher arg never aborts startup.
+            if (has_command) try out.append(allocator, argv[i]);
             continue;
         };
 
@@ -315,7 +370,7 @@ pub fn translateArgs(allocator: Allocator, proc_args: std.process.Args) !std.pro
             continue;
         }
 
-        try out.append(allocator, argv[i]);
+        if (has_command) try out.append(allocator, argv[i]);
     }
 
     if (!seen) return proc_args;
@@ -515,6 +570,7 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
     }
 
     // --- graphics ---------------------------------------------------------
+    if (raw.font_exclusion) |v| p.font_exclusion = try allocator.dupe(u8, v);
     if (raw.webgl_vendor) |v| p.webgl_vendor = try allocator.dupe(u8, v);
     if (raw.webgl_renderer) |v| p.webgl_renderer = try allocator.dupe(u8, v);
     if (p.webgl_vendor.len == 0) p.webgl_vendor = defaultWebglVendor(p.os);
@@ -833,6 +889,9 @@ test "Persona: translateArgs rewrites a launcher argv" {
         "--no-first-run",
         "--canvas-noise",
         "--user-data-dir=/tmp/profile-1",
+        "--load-extension=/tmp/ext-a,/tmp/ext-b",
+        "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+        "https://example.com/startup",
     };
     const out = try translateArgs(a, .{ .vector = &argv });
     const v = out.vector;

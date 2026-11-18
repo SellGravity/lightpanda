@@ -228,12 +228,9 @@
 </script>
 
 <script id=getBattery type=module>
-  // Like Firefox, we don't expose navigator.getBattery. Sites already
-  // have to handle it being undefined, so this is a real-browser shape
-  // rather than a stub that always rejects.
-  testing.diverges('Chrome exposes getBattery', () => {
-    testing.expectEqual('undefined', typeof navigator.getBattery);
-  });
+  // SellGravity fork: Chrome exposes navigator.getBattery (a BatteryManager
+  // promise); its absence is a headless tell.
+  testing.expectEqual('function', typeof navigator.getBattery);
 </script>
 
 

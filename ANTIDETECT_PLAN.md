@@ -2,103 +2,93 @@
 
 Fork: https://github.com/SellGravity/lightpanda, nhánh `antidetect/main`. Upstream: lightpanda-io/browser.
 
-Mục tiêu giống InviFox (SellGravity/firefox): engine nhận **đúng bộ switch** mà launcher đang truyền cho Chromium (`gravbrowser/electron/modules/chromium/chromium-flags.builder.ts`), nên phía launcher chỉ phải sửa rất ít.
+InviPanda là một engine **headless, nhẹ** (mỗi profile ~20–120 MB RAM) dùng chung persona, proxy và bộ switch với profile Chromium của InviBrowser. Launcher điều khiển nó qua **CDP**, giống hệt Chromium.
 
-## 0. Lightpanda hợp với vai trò gì (đọc trước)
+## 1. Kết quả kiểm chứng (2026-11-18)
 
-| | Lightpanda | Chromium fork / InviFox |
-|---|---|---|
-| RAM mỗi profile | ~20–120 MB | 300 MB – 1 GB+ |
-| Giao diện | **không có** (headless) | có cửa sổ |
-| Render pixel (canvas, ảnh, font) | **chưa có**: canvas trả về PNG trắng, layout ước lượng | thật |
-| WebGL | `getContext('webgl')` trả `null` | thật |
-| CDP | **có sẵn** (launcher dùng lại `cdp.service.ts`) | có (Chromium) / không (Firefox) |
-| TLS/HTTP2 fingerprint | libcurl + BoringSSL, **khác Chrome** | Chrome thật |
-| Windows | **không có bản native**, chạy qua WSL2/Docker | có |
+| Hạng mục | Kết quả |
+|---|---|
+| Test upstream (`make test`, chạy trên FS Linux) | 2424/2425 qua. Test còn lại khẳng định *không có* `getBattery` (kiểu Firefox), đã sửa test theo hành vi Chrome |
+| **JA4** (tls.peet.ws) | `t13d1516h2_8daaf6152771_d8a2da3f94cd`, **trùng JA4 Chrome 131+** |
+| **HTTP/2 Akamai** | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p`, **trùng Chrome** |
+| JA3 | Đổi theo từng kết nối (permute extension), giống Chrome |
+| CDP e2e từ Windows qua WSL | Mọi lệnh launcher dùng (Target/Page/Runtime/DOM/Input/Network) đều OK |
+| Canvas | Vẽ pixel thật. Hash khác nhau giữa các profile, ổn định trong cùng một profile |
+| Font | Persona Windows thấy font Windows, Mac thấy font Mac. `--font-exclusion-list` hoạt động |
 
-Vì vậy Lightpanda **không thể 100% giống Chrome trước các anti-bot mạnh** (FB, TikTok, Cloudflare Turnstile, Akamai) cho tới khi xong P3–P5. Vai trò hợp lý: **worker headless nhẹ** cho các tác vụ hàng loạt (crawl, check tài khoản, scrape, tự động hoá form) chạy hàng trăm profile trên một máy, mỗi profile vẫn giữ cùng persona và proxy như profile Chromium.
+## 2. Hợp đồng với launcher
 
-## 1. Hợp đồng với launcher
+`src/Persona.zig` → `translateArgs()` được gọi trong `main.zig` trước `Config.parseArgs`.
 
-`src/Persona.zig` → `translateArgs()` được gọi trong `main.zig` trước `Config.parseArgs`:
+- **Chế độ launcher** (không có subcommand): tự chèn `serve`. Chỉ giữ các tùy chọn đã dịch; switch chỉ Chromium có, `--load-extension` và URL khởi động đều bị bỏ.
+- Các switch được dịch sang tuỳ chọn native:
+  - `--remote-debugging-port=N` → `--host 127.0.0.1 --port N`
+  - `--timezone`, `--lang` → `--timezone`, `--locale`
+  - `--proxy-server=socks5://…` → `--http-proxy socks5h://…` (**DNS đi qua proxy**)
+- Persona dùng chung cho cả process: mỗi process là một profile.
+- Không có switch nào của launcher thì chạy y như upstream.
 
-1. Gỡ các switch của launcher ra khỏi argv và ghi vào persona dùng chung cho cả process (mỗi process là một profile).
-2. Không có subcommand thì tự chèn `serve`, vì launcher luôn chạy ở chế độ CDP server.
-3. Dịch các switch sang tuỳ chọn native của Lightpanda:
-   - `--remote-debugging-port=N` → `--host 127.0.0.1 --port N`
-   - `--timezone=X` → `--timezone X`
-   - `--lang=vi-VN` → `--locale vi-VN` (Accept-Language và navigator.languages)
-   - `--proxy-server=socks5://u:p@h:p` → `--http-proxy socks5h://...`. **DNS đi qua proxy.** libcurl chỉ làm vậy với `socks5h://`, còn Chromium luôn làm vậy.
-4. Nuốt bỏ các switch chỉ Chromium có (`--disable-*`, `--no-first-run`…).
-5. Không có switch nào của launcher thì `Persona.active = false` và mọi thứ chạy y như upstream, nên test upstream vẫn qua.
-
-Lệnh launcher sẽ chạy (mẫu):
+Switch được hỗ trợ:
 
 ```
-lightpanda --remote-debugging-port=9333 --user-data-dir=/profiles/p1 \
-  --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" \
-  --ua-full-version=140.0.7339.128 --hardware-concurrency=8 --device-memory=8 \
-  --window-size=1536,864 --timezone=Asia/Ho_Chi_Minh --lang=vi-VN \
-  --webgl-vendor="Google Inc. (Intel)" --webgl-renderer="ANGLE (Intel, ...)" \
-  --proxy-server=socks5://u:p@1.2.3.4:1080 --location-mode=allow,10.77,106.70 --canvas-noise
+--user-agent  --ua-full-version  --ua-platform-version  --hardware-concurrency
+--device-memory  --device-mode=phone  --device-size  --window-size  --screen-size
+--window-position  --window-scale  --max-touch-points  --webgl-vendor
+--webgl-renderer  --canvas-noise  --audio-noise  --fonts-noise  --rects-noise
+--fp-seed  --font-exclusion-list  --media-device-count  --webrtc-mode
+--location-mode=allow|block|ask[,lat,lng]  --timezone  --lang  --proxy-server
+--remote-debugging-port  --user-data-dir (seed nhiễu)
 ```
 
-## 2. Trạng thái P1 (đã code, CHƯA build: máy chưa có Zig/WSL)
+## 3. Các bề mặt đã giả lập
 
-| Bề mặt | Cách làm | Trạng thái |
+| Nhóm | Chi tiết | File |
 |---|---|---|
-| `--user-agent` (HTTP + `navigator.userAgent`) | Lấy từ persona, cho phép chuỗi Mozilla (upstream chặn). CDP `setUserAgentOverride` cũng được nhận | xong |
-| UA-CH: `Sec-Ch-Ua`, `-Mobile`, `-Platform` | Brand GREASE **theo đúng thuật toán Chromium** (ký tự và thứ tự phụ thuộc major version, có test so với Chrome 120/131/138/140). Bỏ `Full-Version-List` mặc định (Chrome chỉ gửi khi trang yêu cầu). Header đặt trước User-Agent | xong |
-| `navigator.userAgentData` | brands, mobile, platform, `getHighEntropyValues` (platformVersion, uaFullVersion, fullVersionList, architecture, bitness, formFactors) | xong. Cần launcher truyền `--ua-full-version` |
-| `navigator.platform/appVersion/vendor/productSub/vendorSub` | Suy ra từ UA (`Win32`, `MacIntel`, `Linux armv81`…); vendor `Google Inc.` | xong |
-| `hardwareConcurrency`, `deviceMemory` | Persona. deviceMemory được làm tròn về bucket của Chrome (0.25…8) | xong (cả worker) |
-| `maxTouchPoints`, mobile | Lấy từ `--device-mode=phone` / UA Android: 5 điểm chạm, DPR 2.625 | xong |
-| Màn hình, cửa sổ | `screen.*` từ `--window-size` (desktop) hoặc `--device-size` (mobile). `availHeight` trừ taskbar. `outerWidth/Height` cộng thêm khung tab + toolbar (lộ kiểu headless là outer == inner). `screenX/Y` lấy từ `--window-position`. `devicePixelRatio` lấy từ `--window-scale` | xong |
-| Timezone | `--timezone` native của Lightpanda | xong |
-| Ngôn ngữ | `--locale` native | xong |
-| Proxy | `socks5h` / `socks4a` để DNS không rò rỉ | xong |
-| Geolocation | `--location-mode=allow,lat,lng`: tự cấp quyền và trả toạ độ, accuracy thêm nhiễu ổn định theo profile | xong (`permissions.query` để P2) |
-| WebGL vendor/renderer | `getParameter` trả VENDOR/RENDERER/VERSION/UNMASKED_* | chuỗi xong, **nhưng `getContext('webgl')` vẫn trả null** (P2) |
-| Telemetry | Tắt hẳn khi chạy profile của launcher (nếu bật, mọi profile sẽ bị gắn cùng một install id) | xong |
-| `navigator.webdriver` | upstream đã trả `false` | xong |
-| Seed nhiễu | `--fp-seed`, hoặc hash của `--user-data-dir` | đã có helper; thuật toán để P3 |
+| UA / UA-CH | UA launcher (Mozilla được phép), brand GREASE theo **thuật toán Chromium**. `Sec-Ch-Ua*` đúng thứ tự Chrome, chỉ gửi trên https/loopback. `userAgentData` + high-entropy | Persona.zig, HttpClient.zig, NavigatorUAData.zig |
+| Header điều hướng | Accept của Chrome, `Upgrade-Insecure-Requests`, `Accept-Encoding: gzip, deflate, br, zstd` | Config.zig, Frame.zig, http.zig |
+| TLS | GREASE, permute ext, cipher, X25519MLKEM768, sigalgs, OCSP/SCT, nén cert brotli, session ticket, ALPS (codepoint mới), ECH GREASE | network/chrome_tls.zig |
+| HTTP/2 | SETTINGS, WINDOW_UPDATE, thứ tự pseudo-header của Chrome | vendor/curl/http2.c |
+| navigator | platform, vendor, appVersion, productSub, hardwareConcurrency, deviceMemory (bucket), maxTouchPoints, plugins/mimeTypes (5 plugin PDF), pdfViewerEnabled, connection, mediaDevices, getBattery, 23 member chỉ Chrome có (clipboard, usb, hid, gpu…), getGamepads, share… | Navigator.zig, NavigatorExtras.zig, PluginArray.zig |
+| Global | Gỡ `globalPrivacyControl` / `modelContext`. Thêm `window.chrome` (app/csi/loadTimes, toString là `[native code]`). Persona mobile gỡ API chỉ desktop có | persona_bootstrap.js |
+| Màn hình / cửa sổ | screen, availHeight (trừ taskbar), outer > inner (khung trình duyệt), screenX/Y, DPR, mobile | Screen.zig, Window.zig, Browser.zig |
+| Media query | pointer/hover, color-gamut, color, prefers-*, forced-colors, dynamic-range, device-* lấy theo màn hình, resolution / -webkit-device-pixel-ratio | css/MediaQuery.zig |
+| WebGL | Context WebGL1 với bảng `getParameter` theo nhóm GPU (desktop/Apple/mobile), extension theo đúng thứ tự Chrome, precision format, các object GL | canvas/WebGLRenderingContext.zig |
+| Canvas 2D | **Raster thật** bằng tiny-skia: path, arc, chữ, gradient, 26 chế độ composite, putImageData. PNG đúng kích thước | canvas/raster.zig, rust/render/canvas.rs |
+| Nhiễu | canvas (pixel theo seed), fonts (measureText), rects (getBoundingClientRect), audio (OfflineAudioContext) | raster.zig, Element.zig, Persona.zig |
+| Font | Danh sách font theo OS, metric riêng cho từng font, fallback theo đúng CSS, `--font-exclusion-list` | fonts.zig, layout.zig |
+| Quyền / vị trí | `permissions.query` geolocation, toạ độ từ `--location-mode` | Permissions.zig, Geolocation.zig |
+| Khác | `/json/version` trả lời như Chrome. Telemetry luôn tắt. `Page.getFrameOwner` (Invi dùng) | server/http.zig, telemetry.zig, cdp/page.zig |
 
-## 3. Các dấu hiệu còn lộ (theo mức độ)
+## 4. Giới hạn còn lại
 
-1. **TLS JA3/JA4 và HTTP/2 fingerprint**: libcurl/BoringSSL khác Chrome. Cloudflare và Akamai chặn ngay ở tầng mạng. → P4: dùng curl-impersonate / cấu hình BoringSSL theo Chrome (thứ tự cipher, extension, GREASE, ALPS, cert compression, SETTINGS frame và thứ tự pseudo-header của H2). Upstream đã có sẵn `--http-curves`.
-2. **Canvas trả PNG trắng y hệt nhau** ở mọi profile. Đây vừa là dấu hiệu bot vừa khiến các profile bị liên kết với nhau. → P3: rasterizer Canvas2D dựa trên `tiny-skia` + `parley` (đã có trong `src/rust/render`), cộng nhiễu theo seed.
-3. **Không có WebGL** → P2: context WebGL giả, có bảng `getParameter` đầy đủ (MAX_TEXTURE_SIZE…), danh sách extension và `getShaderPrecisionFormat` theo GPU trong persona.
-4. **API thừa hoặc thiếu so với Chrome**: `navigator.globalPrivacyControl` và `navigator.modelContext` (Chrome không có), thiếu `chrome.*`, `navigator.connection`, `getBattery`, `mediaDevices`. → P2: ẩn hoặc thêm theo persona.
-5. **Layout xấp xỉ**: `getBoundingClientRect` và font metrics không khớp Chrome. → P5 (khó).
-6. Header `Sec-Ch-Ua` đang gửi cả trên http://, trong khi Chrome chỉ gửi trên secure context. → P2.
-7. WebRTC: Lightpanda không có RTCPeerConnection, nên không rò IP, nhưng việc thiếu API này cũng là một dấu hiệu. → P4: giả API theo `--webrtc-mode`.
+1. **Pixel không giống hệt Chrome thật**: font DejaVu và cách khử răng cưa của tiny-skia khác Skia. Hash canvas là duy nhất cho từng profile, nhưng không trùng hash của "một máy Windows thật" nào.
+2. **WebGL2**: `getContext('webgl2')` trả `null`, trong khi Chrome desktop luôn có.
+3. **Layout xấp xỉ**: không có engine layout thật; vị trí, kích thước phần tử là ước lượng.
+4. **Không có WebRTC, speechSynthesis**: thiếu API chứ không rò IP.
+5. **Không có bản Windows native**: chạy qua WSL2 (hoặc Docker).
+6. Timezone: `Intl.resolvedOptions().timeZone` trả tên canonical của ICU (ví dụ `Asia/Saigon`), giống V8 cùng thế hệ.
 
-## 4. Lộ trình
+## 5. Tích hợp vào InviBrowser
 
-- **P1** (xong code): persona, switch, UA/UA-CH, navigator, màn hình, proxy, geolocation, telemetry.
-- **P1.5**: build và chạy test. `make download-v8 && make fmt && make test`, sau đó test trên CreepJS, BrowserScan, pixelscan, sannysoft.
-- **P2**: WebGL giả, `permissions.query`, `chrome.*` / `connection` / `mediaDevices` / `getBattery`, ẩn API không phải Chrome, client hints chỉ gửi trên https.
-- **P3**: Canvas2D thật (tiny-skia) + nhiễu canvas/rects/fonts theo seed, AudioContext/OfflineAudioContext + nhiễu audio.
-- **P4**: TLS/H2 impersonation giống Chrome theo version trong UA; WebRTC giả.
-- **P5**: font metrics và layout gần với Chrome.
+`integrations/invibrowser/lightpanda-engine.ts`:
+- Dùng lại nguyên bộ arg từ `chromiumConfig.build(...)` và spawn `wsl.exe -d <distro> -e /opt/invipanda/invipanda <args>`.
+- Tự đổi `--user-data-dir` sang dạng `/mnt/c/...`.
+- `waitForCdpReady` và `cdp.service.ts` giữ nguyên, vì WSL2 tự forward localhost.
 
-## 5. Việc phía launcher (gravbrowser)
+Còn phải làm phía launcher:
+- [ ] Thêm `engine: 'lightpanda'` vào profile và UI, rồi gọi `spawnLightpanda(finalArgs)` thay cho `spawn(chromeExe, …)`.
+- [ ] Truyền `--ua-full-version` (bản build Chrome đầy đủ) từ fingerprint.
+- [ ] Phân phối runtime: `scripts/invipanda-package.sh` → `dist/invipanda-linux-x86_64.tar.gz`, cài bằng `scripts/invipanda-install-wsl.sh`.
 
-- [ ] Thêm engine `lightpanda` vào profile và runtime. Bản build Linux x86_64 chạy trong **WSL2** (Windows không có bản native). Launcher gọi `wsl.exe -d <distro> -- /opt/invipanda/lightpanda <flags>`; WSL tự forward `localhost:<port>`.
-  - Hoặc dùng Docker: `docker run -p 127.0.0.1:<port>:<port> sellgravity/invipanda <flags>`.
-- [ ] Đổi đường dẫn `--user-data-dir` sang dạng `/mnt/c/...` khi chạy qua WSL (hiện chỉ dùng làm seed; lưu cookie lâu dài để P2).
-- [ ] Truyền thêm `--ua-full-version=<bản build Chrome đầy đủ>` để high-entropy UA-CH không còn `x.0.0.0`.
-- [ ] `cdp.service.ts` dùng được ngay. Lightpanda chưa có đủ mọi domain CDP, nên cần test từng workflow (Page, Runtime, Network, Input, DOM).
-- [ ] Không gửi `--window-size` theo kích thước ô xếp cửa sổ cho engine này (headless không có cửa sổ). Gửi `--screen-size=W,H` của màn hình giả.
-
-## 6. Build
+## 6. Build và test
 
 ```bash
-# Ubuntu 24.04 (WSL2) hoặc Docker (Dockerfile có sẵn)
+# WSL Ubuntu 24.04 (đặt mã nguồn trên FS Linux, KHÔNG build trên /mnt/c)
 make download-v8
-make fmt          # BẮT BUỘC: zig build fail nếu code chưa đúng format
-make build        # hoặc: zig build -Doptimize=ReleaseFast
-make test F="Persona"
+zig fmt src build.zig      # zig build fail nếu sai format
+zig build                  # bản debug
+make test                  # toàn bộ test
+scripts/invipanda-package.sh   # bản ReleaseFast + gói phân phối
 ```
 
-Giấy phép: AGPL-3.0. Nếu cung cấp InviPanda cho người dùng qua mạng, hoặc phân phối kèm InviBrowser, thì **phải công khai mã nguồn bản sửa**. Fork này vốn đã public.
+Giấy phép: AGPL-3.0. Phân phối kèm InviBrowser hoặc chạy như dịch vụ thì phải công khai mã nguồn bản sửa. Fork này vốn đã public. `vendor/curl/http2.c` theo giấy phép curl (vendor/curl/COPYING).

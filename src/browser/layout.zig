@@ -26,6 +26,7 @@ const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const text_measure = @import("text_measure.zig");
+const fonts = @import("fonts.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 // Width flows down (height flows up): a block in normal flow is as wide as
@@ -385,9 +386,12 @@ pub fn LineText(comptime mode: ContentMode) type {
             }
             const style_manager = &owner._style_manager;
             const white_space = style_manager.whiteSpace(self.parent);
+            // SellGravity antidetect: the persona's font metrics for this
+            // element's font-family (fonts.zig); 1.0 upstream.
+            const family_factor = if (fonts.resolve(style_manager.computedFontFamily(self.parent) orelse "")) |r| r.factor else 1.0;
             self.wrap = .{
                 .line_width = textLineWidth(self.parent, mode, white_space, owner),
-                .font_size = style_manager.computedFontSize(self.parent),
+                .font_size = style_manager.computedFontSize(self.parent) * family_factor,
                 .white_space = white_space,
             };
             self.wrap.?.add(data);
