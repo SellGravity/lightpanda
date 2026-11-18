@@ -477,8 +477,21 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
     p.rects_noise = raw.rects_noise;
 
     // --- user agent -------------------------------------------------------
-    if (raw.user_agent) |ua| {
-        if (ua.len > 0) {
+    var ua_full_build: ?[]const u8 = null;
+    if (raw.user_agent) |ua_in| {
+        if (ua_in.len > 0) {
+            // Chrome 110+ sends the reduced UA ("Chrome/143.0.0.0") and keeps
+            // the build for client hints. A launcher UA carrying the full
+            // build ("Chrome/143.0.7490.0") gives both.
+            var ua = ua_in;
+            if (chromeVersionToken(ua_in)) |tok| {
+                if (!std.mem.endsWith(u8, tok, ".0.0.0") and std.mem.count(u8, tok, ".") == 3) {
+                    ua_full_build = try allocator.dupe(u8, tok);
+                    const major_end = std.mem.findScalar(u8, tok, '.').?;
+                    const start = @intFromPtr(tok.ptr) - @intFromPtr(ua_in.ptr);
+                    ua = try std.mem.concat(allocator, u8, &.{ ua_in[0..start], tok[0..major_end], ".0.0.0", ua_in[start + tok.len ..] });
+                }
+            }
             p.user_agent = try allocator.dupeSentinel(u8, ua, 0);
             p.os = detectOs(ua);
             p.mobile = p.os == .android or p.os == .ios or std.mem.find(u8, ua, "Mobile") != null;
@@ -503,10 +516,15 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
     }
 
     if (p.chrome_major > 0) {
+        // Real Chrome never reports "N.0.0.0" as its full version: without
+        // one from the launcher, use the release's real build number and a
+        // per-profile patch level.
         p.full_version = if (raw.ua_full_version) |v|
             try allocator.dupe(u8, v)
+        else if (ua_full_build) |v|
+            v
         else
-            try allocator.print("{d}.0.0.0", .{p.chrome_major});
+            try allocator.print("{d}.0.{d}.{d}", .{ p.chrome_major, chromeBuild(p.chrome_major), 40 + p.seed % 160 });
         try p.buildBrands(allocator);
     }
 
@@ -668,6 +686,34 @@ fn chromeMajor(ua: []const u8) u32 {
     var end = start;
     while (end < ua.len and std.ascii.isDigit(ua[end])) end += 1;
     return std.fmt.parseInt(u32, ua[start..end], 10) catch 0;
+}
+
+/// "…Chrome/143.0.7490.0 Safari…" -> "143.0.7490.0".
+fn chromeVersionToken(ua: []const u8) ?[]const u8 {
+    const needle = "Chrome/";
+    const pos = std.mem.find(u8, ua, needle) orelse return null;
+    const start = pos + needle.len;
+    var end = start;
+    while (end < ua.len and (std.ascii.isDigit(ua[end]) or ua[end] == '.')) end += 1;
+    if (end == start) return null;
+    return ua[start..end];
+}
+
+/// BUILD in Chrome's MAJOR.0.BUILD.PATCH for a stable release; beyond the
+/// table, Chrome's ~4-week cadence advances BUILD by ~55 per release.
+fn chromeBuild(major: u32) u32 {
+    const known = [_]struct { u32, u32 }{
+        .{ 120, 6099 }, .{ 121, 6167 }, .{ 122, 6261 }, .{ 123, 6312 }, .{ 124, 6367 }, .{ 125, 6422 },
+        .{ 126, 6478 }, .{ 127, 6533 }, .{ 128, 6613 }, .{ 129, 6668 }, .{ 130, 6723 }, .{ 131, 6778 },
+        .{ 132, 6834 }, .{ 133, 6943 }, .{ 134, 6998 }, .{ 135, 7049 }, .{ 136, 7103 }, .{ 137, 7151 },
+        .{ 138, 7204 }, .{ 139, 7258 }, .{ 140, 7339 }, .{ 141, 7390 }, .{ 142, 7444 }, .{ 143, 7499 },
+    };
+    for (known) |k| {
+        if (k[0] == major) return k[1];
+    }
+    if (major > 143) return 7499 + (major - 143) * 55;
+    if (major < 120) return 6099 -| (120 - major) * 60;
+    return 6099;
 }
 
 fn defaultPlatformVersion(os: Os, ua: []const u8) []const u8 {
@@ -981,4 +1027,11 @@ pub fn audioNoise(self: *const Persona, samples: []f32) void {
         const unit = @as(f32, @floatFromInt(z >> 40)) / @as(f32, @floatFromInt(@as(u64, 1) << 24));
         s.* *= 1.0 + (unit * 2.0 - 1.0) * 1.0e-7;
     }
+}
+
+test "Persona: full build from the UA, reduced UA, synthesized build" {
+    try testing.expectEqualStrings("143.0.7490.0", chromeVersionToken("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7490.0 Safari/537.36").?);
+    try testing.expectEqual(@as(u32, 7339), chromeBuild(140));
+    try testing.expectEqual(@as(u32, 7499 + 55 * 4), chromeBuild(147));
+    try testing.expect(chromeVersionToken("Mozilla/5.0 (Macintosh) Firefox/140.0") == null);
 }

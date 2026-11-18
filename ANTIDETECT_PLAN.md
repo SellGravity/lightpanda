@@ -8,7 +8,13 @@ InviPanda là một engine **headless, nhẹ** (mỗi profile ~20–120 MB RAM) 
 
 | Hạng mục | Kết quả |
 |---|---|
-| Test upstream (`make test`, chạy trên FS Linux) | 2424/2425 qua. Test còn lại khẳng định *không có* `getBattery` (kiểu Firefox), đã sửa test theo hành vi Chrome |
+| Test upstream (`make test`, chạy trên FS Linux) | **2426/2426** qua |
+| **BrowserScan** | **100%**, Bot Detection: không phát hiện. Server trả `isBrowserCorrect=1`, kernel `windowVersion 139-140`, `liedWindow=false` |
+| **pixelscan** `/fingerprint-check` | **"Your Browser Fingerprint is consistent"**, No masking / No proxy / No automated behavior. Nhận đúng "Chrome 140 on Windows", font Windows 55/55 (`osFontsStatus: true`), hash hộp đỏ WebGL trùng Chrome |
+| sannysoft | Tất cả qua |
+| iphey | "Your Digital Identity Looks **Trustworthy**", không có tín hiệu đáng ngờ |
+| CreepJS | headless 0%, stealth 0%. like-headless 31% = đúng mức của Chrome desktop thật (ActiveText, theme sáng, 3 API chỉ Android) |
+| Thứ tự header HTTP | Điều hướng / fetch / subresource đúng thứ tự Chrome, có header `priority` (`u=0, i`, `u=1, i`…) |
 | **JA4** (tls.peet.ws) | `t13d1516h2_8daaf6152771_d8a2da3f94cd`, **trùng JA4 Chrome 131+** |
 | **HTTP/2 Akamai** | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p`, **trùng Chrome** |
 | JA3 | Đổi theo từng kết nối (permute extension), giống Chrome |
@@ -59,15 +65,23 @@ Switch được hỗ trợ:
 | Nhiễu | canvas (pixel theo seed), fonts (measureText), rects (getBoundingClientRect), audio (OfflineAudioContext) | raster.zig, Element.zig, Persona.zig |
 | Font | Danh sách font theo OS, metric riêng cho từng font, fallback theo đúng CSS, `--font-exclusion-list` | fonts.zig, layout.zig |
 | Quyền / vị trí | `permissions.query` geolocation, toạ độ từ `--location-mode` | Permissions.zig, Geolocation.zig |
-| Khác | `/json/version` trả lời như Chrome. Telemetry luôn tắt. `Page.getFrameOwner` (Invi dùng) | server/http.zig, telemetry.zig, cdp/page.zig |
+| Bề mặt window | ~450 interface Chrome còn thiếu được tạo thành interface object thật (`new` → "Illegal constructor", đúng chuỗi prototype), **lọc theo phiên bản Chrome của persona**. Gỡ global riêng của Lightpanda (ModelContext, CrossOriginWindow, MemoryInfo…). Thêm attribute/operation của window Chrome (locationbar, external, clientInformation, caches, trustedTypes, on*…) | persona_bootstrap.js, js/native_shim.zig |
+| navigator | Thứ tự `for..in` đúng IDL Chrome (pixelscan băm danh sách này), `serviceWorker`/`caches` có mặt, `devicePosture` (132+), `document.featurePolicy` | persona_bootstrap.js, js/Env.zig |
+| CSS computed | `getComputedStyle` liệt kê đúng danh sách longhand của Chrome (theo phiên bản) + tên camelCase là own property; `::marker` / `::before` / `::after` áp dụng rule của pseudo-element | css/chrome_computed.zig, CSSStyleDeclaration.zig |
+| WebGL | Rasterizer phần mềm (tam giác màu phẳng, clear, viewport, readPixels); `length` của mọi method đúng Chrome; WebGL trên OffscreenCanvas (cả trong worker) | persona_bootstrap.js, OffscreenCanvas.zig |
+| Canvas / font | Nhiễu chỉ trên pixel khử răng cưa (vùng tô đặc và đường biên giữa chúng giữ nguyên). Mỗi font có độ lệch baseline dưới-pixel riêng nên các font khác nhau ra hình khác nhau | raster.zig, fonts.zig |
+| iframe | `src="javascript:…"` chạy script trong about:blank cùng origin (pixelscan dùng để so sánh vân tay) | Frame.zig |
+| Khác | speechSynthesis (giọng Microsoft + Google), quota lưu trữ, `FontFace.load`, màu hệ thống, `/json/version` và `Browser.getVersion` trả lời như Chrome, `Browser.close` kết thúc process, telemetry luôn tắt | SpeechSynthesis.zig, server/http.zig, cdp/domains/browser.zig |
 
 ## 4. Giới hạn còn lại
 
 1. **Pixel không giống hệt Chrome thật**: font DejaVu và cách khử răng cưa của tiny-skia khác Skia. Hash canvas là duy nhất cho từng profile, nhưng không trùng hash của "một máy Windows thật" nào.
 2. **Layout xấp xỉ**: không có engine layout thật; vị trí, kích thước phần tử là ước lượng.
-3. **Không có WebRTC, speechSynthesis**: thiếu API chứ không rò IP.
+3. **WebRTC chỉ là bề mặt**: có `RTCPeerConnection` chống rò IP nhưng không có media thật.
 4. **Không có bản Windows native**: chạy qua WSL2 (hoặc Docker).
-5. Timezone: `Intl.resolvedOptions().timeZone` trả tên canonical của ICU (ví dụ `Asia/Saigon`), giống V8 cùng thế hệ.
+5. **WebGL chỉ vẽ được hình màu phẳng**: đủ cho các bài kiểm tra kiểu "hộp đỏ"; shader phức tạp (gradient, texture) thì không ra pixel.
+6. BrowserScan có bảng phiên bản CSS riêng (server) đọc ra `cssVersion 133-134` cho persona 140 (lệch 6). Không bị trừ điểm (chỉ tính khi CSS, JS và window cùng lệch), nhưng chưa khớp hẳn.
+7. pixelscan so "legitimateHash" (featurePolicy + thứ tự navigator + giọng Google) với kho Chrome thật của họ: hiện trả `match:false` nhưng `legitimate:true`; không ảnh hưởng kết luận "consistent".
 
 ## 5. Tích hợp vào InviBrowser
 
@@ -76,8 +90,11 @@ Switch được hỗ trợ:
 - Tự đổi `--user-data-dir` sang dạng `/mnt/c/...`.
 - `waitForCdpReady` và `cdp.service.ts` giữ nguyên, vì WSL2 tự forward localhost.
 
-Còn phải làm phía launcher:
-- [ ] Thêm `engine: 'lightpanda'` vào profile và UI, rồi gọi `spawnLightpanda(finalArgs)` thay cho `spawn(chromeExe, …)`.
+Phía launcher (gravbrowser) **đã làm** trên nhánh `feat/lightpanda-engine` (worktree `InviBrower/gravbrowser-lightpanda`, dựa trên `feat/invifox-engine`, commit `d4fb8ad7`, chưa push):
+- [x] `engine: 'lightpanda'` trong type, validator, chuẩn hoá; UI tạo/sửa profile có lựa chọn thứ ba "InviPanda (headless)" kèm gợi ý (en/vi).
+- [x] `electron/modules/lightpanda/lightpanda-engine.ts`: spawn qua `wsl.exe -d <distro> -e /opt/invipanda/invipanda` (ghi đè bằng `INVIPANDA_WSL_DISTRO` / `INVIPANDA_BIN`), kill process Linux theo cổng debug.
+- [x] Launcher: kiểm tra runtime (`INVIPANDA_RUNTIME_NOT_FOUND`), user-data-dir riêng, bỏ extension, profile giới hạn URL thì từ chối chạy; dừng êm bằng CDP `Browser.close`, dừng cưỡng bức kill cả process Linux.
+- [x] `cdp.service`: chỉ Firefox là không có CDP, nên automation/API ngoài chạy được trên InviPanda.
 - [ ] Truyền `--ua-full-version` (bản build Chrome đầy đủ) từ fingerprint.
 - [ ] Phân phối runtime: `scripts/invipanda-package.sh` → `dist/invipanda-linux-x86_64.tar.gz`, cài bằng `scripts/invipanda-install-wsl.sh`.
 
