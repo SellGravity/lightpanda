@@ -46,6 +46,7 @@ const DEV_TOOLS_WINDOW_ID = 1923710101;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
+        close,
         getVersion,
         setPermission,
         setWindowBounds,
@@ -56,6 +57,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .close => return close(cmd),
         .getVersion => return getVersion(cmd),
         .setPermission => return setPermission(cmd),
         .setWindowBounds => return setWindowBounds(cmd),
@@ -67,6 +69,24 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn getVersion(cmd: *CDP.Command) !void {
+    // SellGravity antidetect: automation libraries surface these
+    // (puppeteer browser.userAgent()), so a persona reports itself.
+    if (lp.Persona.active) {
+        const p = lp.Persona.get();
+        if (p.user_agent) |ua| {
+            const product = if (p.full_version.len > 0)
+                try std.fmt.allocPrint(cmd.arena, "Chrome/{s}", .{p.full_version})
+            else
+                try std.fmt.allocPrint(cmd.arena, "Chrome/{d}.0.0.0", .{p.chrome_major});
+            return cmd.sendResult(.{
+                .protocolVersion = PROTOCOL_VERSION,
+                .product = product,
+                .revision = REVISION,
+                .userAgent = ua,
+                .jsVersion = JS_VERSION,
+            }, .{});
+        }
+    }
     // TODO: pre-serialize?
     return cmd.sendResult(.{
         .protocolVersion = PROTOCOL_VERSION,
@@ -75,6 +95,17 @@ fn getVersion(cmd: *CDP.Command) !void {
         .userAgent = CDP_USER_AGENT,
         .jsVersion = JS_VERSION,
     }, .{});
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-close
+// SellGravity antidetect: in launcher (persona) mode the process is one
+// profile's browser, so Browser.close ends it like Chrome does - the
+// launcher's graceful stop waits for that exit. The reply goes out first;
+// SIGTERM then runs the normal signal-driven shutdown.
+fn close(cmd: *CDP.Command) !void {
+    if (!lp.Persona.active) return error.UnknownMethod;
+    try cmd.sendResult(null, .{});
+    std.posix.kill(std.c.getpid(), std.posix.SIG.TERM) catch {};
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-setDownloadBehavior
