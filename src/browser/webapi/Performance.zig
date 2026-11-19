@@ -119,20 +119,26 @@ pub fn getTiming(self: *Performance) *PerformanceTiming {
 }
 
 pub fn now(self: *const Performance) f64 {
-    const current = highResTimestamp();
-    const elapsed = current - self._time_origin;
-    return toMillis(elapsed);
+    return relativeMillis(self._time_origin, highResTimestamp());
 }
 
-/// A time-origin relative duration in milliseconds. With a persona, clamped
-/// like Chrome's TimeClamper: 100µs steps (not cross-origin isolated), each
-/// boundary crossed at a per-step pseudo-random threshold so the clamp can't
-/// be averaged away. Plain 5µs steps give the engine away.
-pub fn toMillis(elapsed_us: u64) f64 {
+/// Milliseconds from `origin` to `ts` (boot-clock microseconds). With a
+/// persona, like Chrome: the elapsed time is clamped by the TimeClamper -
+/// 100µs steps, each boundary crossed at a per-step pseudo-random threshold -
+/// and goes through monotonic seconds-since-boot as doubles, which leaves
+/// Chrome's float residue (1038.2999999970198, steps of 0.0999999940...);
+/// exact multiples of 0.1 give a fake clock away. Uptime: 2-30 h per profile.
+pub fn relativeMillis(origin: u64, ts: u64) f64 {
     if (!lp.Persona.active) {
-        return @as(f64, @floatFromInt(elapsed_us)) / 1000.0;
+        return @as(f64, @floatFromInt(ts -| origin)) / 1000.0;
     }
-    return @as(f64, @floatFromInt(clampMicros(elapsed_us, lp.Persona.get().seed))) / 1000.0;
+    const p = lp.Persona.get();
+    const hour: u64 = 3_600_000_000;
+    const uptime = 2 * hour + (p.seed % (28 * hour));
+    const delta = clampMicros(ts -| origin, p.seed);
+    const origin_s = @as(f64, @floatFromInt(origin + uptime)) / 1_000_000.0;
+    const now_s = origin_s + @as(f64, @floatFromInt(delta)) / 1_000_000.0;
+    return (now_s - origin_s) * 1000.0;
 }
 
 fn clampMicros(micros: u64, secret: u64) u64 {
@@ -849,8 +855,7 @@ fn relative(self: *const Performance, micros: u64) f64 {
     if (micros == 0) {
         return 0;
     }
-    const elapsed = micros -| self._time_origin;
-    return toMillis(@divTrunc(elapsed + 2, 5) * 5);
+    return relativeMillis(self._time_origin, micros);
 }
 
 pub const JsApi = struct {

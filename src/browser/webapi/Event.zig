@@ -360,7 +360,7 @@ fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
     if (self._time_stamp <= origin) {
         return 0.0;
     }
-    return @import("Performance.zig").toMillis(self._time_stamp - origin);
+    return @import("Performance.zig").relativeMillis(origin, self._time_stamp);
 }
 
 pub fn getIsTrusted(self: *const Event) bool {
