@@ -1,0 +1,99 @@
+name: invipanda
+
+# SellGravity antidetect: InviPanda runtimes for the InviBrowser launcher.
+# Every push to antidetect/main builds them (artifacts); an `invipanda-v*`
+# tag also publishes them as a GitHub release the launcher downloads from:
+#   invipanda-macos-aarch64.tar.gz, invipanda-macos-x86_64.tar.gz,
+#   invipanda-linux-x86_64.tar.gz, invipanda-linux-aarch64.tar.gz
+# (Windows runs the Linux build inside WSL2.)
+
+on:
+  push:
+    branches: [antidetect/main]
+    tags: ['invipanda-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: invipanda-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-22.04
+            cpu_flag: -Dcpu=x86_64
+          - os: linux
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            cpu_flag: -Dcpu=generic
+          # macos-15 is Apple silicon; pin the CPU so M1 Macs can run it.
+          - os: macos
+            arch: aarch64
+            runner: macos-15
+            cpu_flag: -Dcpu=apple_m1
+          - os: macos
+            arch: x86_64
+            runner: macos-15-intel
+            cpu_flag: -Dcpu=x86_64
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install
+        with:
+          os: ${{ matrix.os }}
+          arch: ${{ matrix.arch }}
+
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
+
+      - name: zig build
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast ${{ matrix.cpu_flag }}
+
+      - name: smoke test
+        # launcher mode, as InviBrowser starts it: /json lists a page
+        run: |
+          ./zig-out/bin/lightpanda version
+          ./zig-out/bin/lightpanda --remote-debugging-port=9333 --user-data-dir="$RUNNER_TEMP/profile" \
+            --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7490.0 Safari/537.36" &
+          for i in $(seq 1 60); do
+            if curl -s http://127.0.0.1:9333/json | grep -q webSocketDebuggerUrl; then ok=1; break; fi
+            sleep 1
+          done
+          curl -s http://127.0.0.1:9333/json/version
+          kill %1
+          test "${ok:-}" = 1
+
+      - name: package
+        run: scripts/invipanda-package-ci.sh ${{ matrix.os }} ${{ matrix.arch }} zig-out/bin/lightpanda
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: invipanda-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/invipanda-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            dist/invipanda-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
+          retention-days: 14
+
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/invipanda-v')
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+        with:
+          allowUpdates: true
+          artifacts: dist/invipanda-${{ matrix.os }}-${{ matrix.arch }}.tar.gz,dist/invipanda-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
+          tag: ${{ github.ref_name }}
+          makeLatest: true
