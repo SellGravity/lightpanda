@@ -137,8 +137,8 @@ pub const MediaDevices = struct {
         var list: std.ArrayList(*MediaDeviceInfo) = .empty;
         const allocator = exec.call_arena;
         for (kinds, 0..) |k, i| {
-            // Without a grant Chrome collapses each kind to a single entry.
-            if (counts[i] > 0) {
+            // the profile's counts, as Gravity Chromium lists them
+            for (0..counts[i]) |_| {
                 try list.append(allocator, try exec._factory.create(MediaDeviceInfo{ ._kind = k }));
             }
         }

@@ -241,7 +241,7 @@ pub fn runPersonaBootstrap(local: *const js.Local, source: []const u8, timezone:
     const bootstrap: *const v8.Function = @ptrCast(fn_value.handle);
     const make = makerFunction(local) orelse return error.BootstrapMaker;
     const Persona = @import("../../Persona.zig");
-    const persona = try local.zigValueToJs(.{ .timezone = timezone orelse "", .chromeMajor = Persona.get().chrome_major, .parity = Persona.parity_table }, .{});
+    const persona = try local.zigValueToJs(.{ .timezone = timezone orelse "", .chromeMajor = Persona.get().chrome_major, .parity = Persona.parity_table, .mobile = Persona.get().mobile, .ios = Persona.get().os == .ios }, .{});
     var argv = [_]*const v8.Value{ @ptrCast(make.handle), persona.handle };
     const recv: *const v8.Value = @ptrCast(v8.v8__Context__Global(local.handle).?);
     _ = v8.v8__Function__Call(bootstrap, local.handle, recv, 2, @ptrCast(&argv)) orelse return error.BootstrapThrew;

@@ -158,6 +158,36 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
     return if (target.len == 0) null else target;
 }
 
+/// The layout width a viewport meta's content asks for: width=device-width
+/// or an initial-scale alone give the device width, width=N gives N.
+fn layoutWidth(content: []const u8, device_width: u32) ?u32 {
+    var width: ?u32 = null;
+    var has_scale = false;
+    var it = std.mem.tokenizeAny(u8, content, ",; ");
+    while (it.next()) |part| {
+        const eq = std.mem.findScalar(u8, part, '=') orelse continue;
+        const key = std.mem.trim(u8, part[0..eq], &std.ascii.whitespace);
+        const value = std.mem.trim(u8, part[eq + 1 ..], &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(key, "width")) {
+            if (std.ascii.eqlIgnoreCase(value, "device-width")) {
+                width = device_width;
+            } else if (std.fmt.parseFloat(f64, value)) |n| {
+                if (n >= 1 and n <= 10000) width = @intFromFloat(n);
+            } else |_| {}
+        } else if (std.ascii.eqlIgnoreCase(key, "initial-scale")) {
+            has_scale = true;
+        }
+    }
+    return width orelse if (has_scale) device_width else null;
+}
+
+test "Meta: viewport layout width" {
+    try std.testing.expectEqual(@as(?u32, 412), layoutWidth("width=device-width, initial-scale=1", 412));
+    try std.testing.expectEqual(@as(?u32, 412), layoutWidth("initial-scale=1", 412));
+    try std.testing.expectEqual(@as(?u32, 600), layoutWidth("width=600", 412));
+    try std.testing.expectEqual(@as(?u32, null), layoutWidth("user-scalable=no", 412));
+}
+
 pub const Build = struct {
     pub fn created(node: *Node, frame: *Frame) !void {
         // A document without a browsing context has no policy or refresh to set.
@@ -167,6 +197,21 @@ pub const Build = struct {
 
         const self = node.as(Meta);
         const el = self.asElement();
+
+        // <meta name=viewport>: a phone persona's layout viewport.
+        if (el.getName()) |name| {
+            if (std.ascii.eqlIgnoreCase(name, "viewport")) viewport: {
+                if (!lp.Persona.active or !lp.Persona.get().mobile) break :viewport;
+                const doc_frame = node.getDocument(frame)._frame orelse break :viewport;
+                if (doc_frame.parent != null) break :viewport;
+                const content = el.getAttributeInterned("content") orelse break :viewport;
+                const width = layoutWidth(content, doc_frame.page.session.browser.getViewport().width) orelse break :viewport;
+                if (doc_frame._mobile_layout_width != width) {
+                    doc_frame._mobile_layout_width = width;
+                    doc_frame.page.viewportChanged();
+                }
+            }
+        }
 
         // <meta name=referrer> sets the document's referrer policy.
         if (el.getName()) |name| {

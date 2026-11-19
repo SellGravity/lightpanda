@@ -513,16 +513,14 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
     var ua_full_build: ?[]const u8 = null;
     if (raw.user_agent) |ua_in| {
         if (ua_in.len > 0) {
-            // Chrome 110+ sends the reduced UA ("Chrome/143.0.0.0") and keeps
-            // the build for client hints. A launcher UA carrying the full
-            // build ("Chrome/143.0.7490.0") gives both.
-            var ua = ua_in;
+            // The UA goes out exactly as the launcher gives it, as Gravity
+            // Chromium sends it (same profile, same string on every engine).
+            // A full build in it ("Chrome/143.0.7490.0") is also the client
+            // hints' full version.
+            const ua = ua_in;
             if (chromeVersionToken(ua_in)) |tok| {
                 if (!std.mem.endsWith(u8, tok, ".0.0.0") and std.mem.count(u8, tok, ".") == 3) {
                     ua_full_build = try allocator.dupe(u8, tok);
-                    const major_end = std.mem.findScalar(u8, tok, '.').?;
-                    const start = @intFromPtr(tok.ptr) - @intFromPtr(ua_in.ptr);
-                    ua = try std.mem.concat(allocator, u8, &.{ ua_in[0..start], tok[0..major_end], ".0.0.0", ua_in[start + tok.len ..] });
                 }
             }
             p.user_agent = try allocator.dupeSentinel(u8, ua, 0);
@@ -533,6 +531,7 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
                 p.app_version = p.user_agent.?["Mozilla/".len..];
             }
             p.platform_version = defaultPlatformVersion(p.os, ua);
+            if (p.os == .android) p.model = androidModel(ua);
             // Chrome always reports three components ("14" -> "14.0.0").
             const dots = std.mem.count(u8, p.platform_version, ".");
             if (dots < 2) {
@@ -567,7 +566,9 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
         if (n > 0 and n <= 256) p.hardware_concurrency = n;
     }
     if (raw.device_memory) |v| {
-        p.device_memory = clampDeviceMemory(std.fmt.parseFloat(f64, v) catch 8.0);
+        // as Gravity Chromium: the profile's value, not Chrome's bucket
+        const m = std.fmt.parseFloat(f64, v) catch 8.0;
+        if (m > 0 and m <= 1024) p.device_memory = m;
     }
     p.max_touch_points = if (p.mobile) 5 else 0;
     if (raw.max_touch_points) |v| {
@@ -576,11 +577,13 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
     }
 
     // --- screen / window --------------------------------------------------
+    // Gravity Chromium's phone mode renders at 3x. The launcher's
+    // --window-scale is a window-tiling percent (100 = untiled); only a real
+    // factor (0.5..5) is a device scale.
+    if (p.mobile) p.device_scale = 3;
     if (raw.window_scale) |v| {
         const s = std.fmt.parseFloat(f32, v) catch 0;
         if (s >= 0.5 and s <= 5.0) p.device_scale = s;
-    } else if (p.mobile) {
-        p.device_scale = 2.625;
     }
 
     var sw: u32 = 0;
@@ -601,8 +604,8 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
             p.outer_width = sw;
             p.outer_height = sh;
             p.inner_width = sw;
-            // status bar + collapsed address bar of Chrome for Android
-            p.inner_height = sh -| 80;
+            // Gravity's phone mode: the page has the whole device screen
+            p.inner_height = sh;
         } else {
             // A maximized Chrome window: fills the available area, minus the
             // tab strip + toolbar (~87 CSS px on Windows/Linux, ~80 on macOS).
@@ -653,11 +656,14 @@ fn apply(allocator: Allocator, raw: *const Raw) !void {
     }
     if (raw.location_mode) |m| p.parseLocation(m);
     if (raw.media_device_count) |m| {
+        // --media-device-count=<audioinput>,<audiooutput>,<videoinput>
+        // (chromium-flags.builder); stored in Chrome's listing order
+        const slot = [_]usize{ 0, 2, 1 };
         var it = std.mem.splitScalar(u8, m, ',');
         var idx: usize = 0;
         while (it.next()) |part| : (idx += 1) {
-            if (idx >= p.media_device_count.len) break;
-            p.media_device_count[idx] = std.fmt.parseInt(u8, std.mem.trim(u8, part, " "), 10) catch p.media_device_count[idx];
+            if (idx >= slot.len) break;
+            p.media_device_count[slot[idx]] = std.fmt.parseInt(u8, std.mem.trim(u8, part, " "), 10) catch p.media_device_count[slot[idx]];
         }
     }
 
@@ -685,15 +691,45 @@ fn parsePair(s: []const u8, a: *u32, b: *u32) bool {
     return true;
 }
 
-/// navigator.deviceMemory is bucketed by Chrome to a power of two in
-/// [0.25, 8] (desktop). Anything else is a fingerprint in itself.
-fn clampDeviceMemory(v: f64) f64 {
-    const buckets = [_]f64{ 0.25, 0.5, 1, 2, 4, 8 };
-    var best: f64 = 8;
-    for (buckets) |b| {
-        if (b <= v) best = b;
+/// Chrome's application locale for --lang (l10n_util::CheckAndResolveLocale):
+/// the ICU default locale pages see through Intl. "vi-VN" runs Chrome in
+/// "vi", "en-AU" in "en-GB", "es-MX" in "es-419"...
+pub fn chromeAppLocale(tag: []const u8) [:0]const u8 {
+    const locales = [_][:0]const u8{
+        "af", "am",    "ar",    "as",    "az",    "be", "bg",    "bn", "bs", "ca", "cs",      "cy", "da", "de", "el", "en-GB", "en-US", "es", "es-419",
+        "et", "eu",    "fa",    "fi",    "fil",   "fr", "fr-CA", "gl", "gu", "he", "hi",      "hr", "hu", "hy", "id", "is",    "it",    "ja", "ka",
+        "kk", "km",    "kn",    "ko",    "ky",    "lo", "lt",    "lv", "mk", "ml", "mn",      "mr", "ms", "my", "nb", "ne",    "nl",    "or", "pa",
+        "pl", "pt-BR", "pt-PT", "ro",    "ru",    "si", "sk",    "sl", "sq", "sr", "sr-Latn", "sv", "sw", "ta", "te", "th",    "tr",    "uk", "ur",
+        "uz", "vi",    "zh-CN", "zh-HK", "zh-TW", "zu",
+    };
+    for (locales) |l| {
+        if (std.ascii.eqlIgnoreCase(l, tag)) return l;
     }
-    return if (v < 0.25) 0.25 else best;
+    const lang = tag[0 .. std.mem.findAny(u8, tag, "-_") orelse tag.len];
+    const rest = tag[lang.len..];
+    const has = struct {
+        fn f(s: []const u8, part: []const u8) bool {
+            return std.ascii.findIgnoreCase(s, part) != null;
+        }
+    }.f;
+    if (std.ascii.eqlIgnoreCase(lang, "en")) {
+        if (rest.len == 0 or has(rest, "US") or has(rest, "PH") or has(rest, "PR")) return "en-US";
+        return "en-GB";
+    }
+    if (std.ascii.eqlIgnoreCase(lang, "es")) return if (rest.len == 0 or has(rest, "ES")) "es" else "es-419";
+    if (std.ascii.eqlIgnoreCase(lang, "pt")) return if (has(rest, "BR")) "pt-BR" else "pt-PT";
+    if (std.ascii.eqlIgnoreCase(lang, "zh")) {
+        if (has(rest, "TW") or has(rest, "Hant")) return if (has(rest, "HK") or has(rest, "MO")) "zh-HK" else "zh-TW";
+        if (has(rest, "HK") or has(rest, "MO")) return "zh-HK";
+        return "zh-CN";
+    }
+    if (std.ascii.eqlIgnoreCase(lang, "no") or std.ascii.eqlIgnoreCase(lang, "nn")) return "nb";
+    if (std.ascii.eqlIgnoreCase(lang, "iw")) return "he";
+    if (std.ascii.eqlIgnoreCase(lang, "tl")) return "fil";
+    for (locales) |l| {
+        if (std.ascii.eqlIgnoreCase(l, lang)) return l;
+    }
+    return "en-US";
 }
 
 fn hostOs() Os {
@@ -716,10 +752,13 @@ pub fn detectOs(ua: []const u8) Os {
 
 /// "Chrome/140.0.0.0" -> 140. Edge/Opera UAs still carry Chrome/<n>.
 fn chromeMajor(ua: []const u8) u32 {
-    const needle = "Chrome/";
-    const pos = std.mem.find(u8, ua, needle) orelse
-        (std.mem.find(u8, ua, "CriOS/") orelse return 0);
-    const start = pos + needle.len;
+    const pos, const len = if (std.mem.find(u8, ua, "Chrome/")) |i|
+        .{ i, "Chrome/".len }
+    else if (std.mem.find(u8, ua, "CriOS/")) |i|
+        .{ i, "CriOS/".len }
+    else
+        return 0;
+    const start = pos + len;
     var end = start;
     while (end < ua.len and std.ascii.isDigit(ua[end])) end += 1;
     return std.fmt.parseInt(u32, ua[start..end], 10) catch 0;
@@ -727,9 +766,13 @@ fn chromeMajor(ua: []const u8) u32 {
 
 /// "…Chrome/143.0.7490.0 Safari…" -> "143.0.7490.0".
 fn chromeVersionToken(ua: []const u8) ?[]const u8 {
-    const needle = "Chrome/";
-    const pos = std.mem.find(u8, ua, needle) orelse return null;
-    const start = pos + needle.len;
+    const pos, const len = if (std.mem.find(u8, ua, "Chrome/")) |i|
+        .{ i, "Chrome/".len }
+    else if (std.mem.find(u8, ua, "CriOS/")) |i|
+        .{ i, "CriOS/".len }
+    else
+        return null;
+    const start = pos + len;
     var end = start;
     while (end < ua.len and (std.ascii.isDigit(ua[end]) or ua[end] == '.')) end += 1;
     if (end == start) return null;
@@ -755,15 +798,27 @@ fn chromeBuild(major: u32) u32 {
 
 fn defaultPlatformVersion(os: Os, ua: []const u8) []const u8 {
     return switch (os) {
-        // Windows 11 reports 13.0.0+ / Windows 10 "10.0.0". The reduced UA
-        // says "Windows NT 10.0" for both; Windows 11 is the common case.
-        .windows => "15.0.0",
+        // "Windows NT 10.0" covers Windows 10 and 11; Gravity Chromium
+        // reports 10.0.0 for both, so the profile reads the same everywhere.
+        .windows => "10.0.0",
         .macos => "15.5.0",
         .linux => "6.8.0",
         .chromeos => "16093.68.0",
         .android => androidVersion(ua),
         .ios => "18.5.0",
     };
+}
+
+/// "(Linux; Android 14; Pixel 7)" -> "Pixel 7" (UA-CH model). The reduced
+/// UA's placeholder "K" names no device.
+fn androidModel(ua: []const u8) []const u8 {
+    const pos = std.mem.find(u8, ua, "Android ") orelse return "";
+    const close = std.mem.findScalarPos(u8, ua, pos, ')') orelse return "";
+    const semi = std.mem.findScalarPos(u8, ua, pos, ';') orelse return "";
+    if (semi > close) return "";
+    var model = std.mem.trim(u8, ua[semi + 1 .. close], " ");
+    if (std.mem.find(u8, model, " Build/")) |b| model = model[0..b];
+    return if (std.mem.eql(u8, model, "K")) "" else model;
 }
 
 fn androidVersion(ua: []const u8) []const u8 {
@@ -961,9 +1016,20 @@ test "Persona: OS detection and device memory buckets" {
     try testing.expectEqual(Os.windows, detectOs("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"));
     try testing.expectEqual(Os.macos, detectOs("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"));
     try testing.expectEqual(@as(u32, 140), chromeMajor("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"));
-    try testing.expectEqual(@as(f64, 8), clampDeviceMemory(16));
-    try testing.expectEqual(@as(f64, 4), clampDeviceMemory(6));
-    try testing.expectEqual(@as(f64, 0.25), clampDeviceMemory(0.1));
+    try testing.expectEqualStrings("Pixel 7", androidModel("Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7490.0 Mobile Safari/537.36"));
+    try testing.expectEqualStrings("", androidModel("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36"));
+    try testing.expectEqualStrings("SM-S918B", androidModel("Mozilla/5.0 (Linux; Android 14; SM-S918B Build/UP1A.231005.007) AppleWebKit/537.36"));
+    try testing.expectEqual(@as(u32, 143), chromeMajor("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/143.0.7490.0 Mobile/15E148 Safari/604.1"));
+    try testing.expectEqualStrings("en-US", chromeAppLocale("en"));
+    try testing.expectEqualStrings("vi", chromeAppLocale("vi-VN"));
+    try testing.expectEqualStrings("en-GB", chromeAppLocale("en-AU"));
+    try testing.expectEqualStrings("es-419", chromeAppLocale("es-MX"));
+    try testing.expectEqualStrings("es", chromeAppLocale("es-ES"));
+    try testing.expectEqualStrings("pt-BR", chromeAppLocale("pt-BR"));
+    try testing.expectEqualStrings("zh-TW", chromeAppLocale("zh-Hant-TW"));
+    try testing.expectEqualStrings("zh-CN", chromeAppLocale("zh"));
+    try testing.expectEqualStrings("fr-CA", chromeAppLocale("fr-CA"));
+    try testing.expectEqualStrings("nb", chromeAppLocale("no"));
 }
 
 test "Persona: translateArgs rewrites a launcher argv" {
@@ -1022,7 +1088,10 @@ test "Persona: translateArgs rewrites a launcher argv" {
     const p = get();
     try testing.expectEqual(Os.windows, p.os);
     try testing.expectEqual(@as(u32, 12), p.hardware_concurrency);
-    try testing.expectEqual(@as(f64, 8), p.device_memory);
+    // the profile's value, as Gravity Chromium reports it
+    try testing.expectEqual(@as(f64, 16), p.device_memory);
+    // the UA goes out verbatim, as on Gravity Chromium
+    try testing.expectEqualStrings(std.mem.span(argv[2])["--user-agent=".len..], p.user_agent.?);
     try testing.expectEqual(@as(?u32, 1536), p.screen_width);
     try testing.expectEqual(@as(?u32, 824), p.outer_height);
     try testing.expectEqual(@as(?u32, 737), p.inner_height);

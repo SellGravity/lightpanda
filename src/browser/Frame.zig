@@ -259,6 +259,11 @@ _ongoing_navigate: ?OngoingNavigation = null,
 // for the very common case where we're sure there isn't any.
 _maybe_meta_refresh: bool = false,
 
+// SellGravity antidetect: a phone's layout viewport. Without a
+// <meta name=viewport> a mobile page lays out 980 CSS px wide (Chrome for
+// Android); width=device-width (or initial-scale) gives the device width.
+_mobile_layout_width: ?u32 = null,
+
 // The URL of the current frame
 url: [:0]const u8 = "about:blank",
 

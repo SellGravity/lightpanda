@@ -75,7 +75,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
         .v8_flags = config.v8Flags(),
         .gc_auto_min_mb = config.v8GCAutoMinMb(),
-        .locale = config.locale(),
+        .locale = if (lp.Persona.active) lp.Persona.chromeAppLocale(config.locale()) else config.locale(),
         .timezone = config.timezone(),
     });
     errdefer platform.deinit();

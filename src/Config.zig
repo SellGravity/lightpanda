@@ -1140,7 +1140,7 @@ pub const HttpHeaders = struct {
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
     /// Chrome's document Accept, used for launcher profiles.
-    pub const chrome_navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+    pub const chrome_navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
 
     pub fn navigationAccept() [:0]const u8 {
         return if (lp.Persona.active) chrome_navigation_accept else navigation_accept;
@@ -1207,8 +1207,8 @@ pub const HttpHeaders = struct {
             null;
         errdefer if (proxy_bearer_header) |hdr| allocator.free(hdr);
 
-        var buf: [64]u8 = undefined;
-        const accept_language: AcceptLanguage = try .init(allocator, acceptLanguageFor(&buf, config.locale()));
+        var buf: [96]u8 = undefined;
+        const accept_language: AcceptLanguage = try .init(allocator, acceptLanguageFor(&buf, config.locale(), lp.Persona.active));
 
         return .{
             .user_agent = user_agent,
@@ -1230,17 +1230,23 @@ pub const HttpHeaders = struct {
     /// Chrome's shape: the tag, then its language alone, then English as a
     /// last resort, with descending q values. `buf` must hold the longest
     /// output for a tag that passed validateLocale (35 + 24 bytes).
-    fn acceptLanguageFor(buf: *[64]u8, tag: []const u8) []const u8 {
+    fn acceptLanguageFor(buf: *[96]u8, tag: []const u8, chrome: bool) []const u8 {
         const primary = tag[0 .. std.mem.findScalar(u8, tag, '-') orelse tag.len];
         var w: std.Io.Writer = .fixed(buf);
         w.writeAll(tag) catch unreachable;
         var q: u8 = 9;
-        if (primary.len != tag.len) {
+        const english = std.ascii.eqlIgnoreCase(primary, "en");
+        if (primary.len != tag.len and !(chrome and english)) {
             w.print(",{s};q=0.{d}", .{ primary, q }) catch unreachable;
             q -= 1;
         }
-        if (!std.ascii.eqlIgnoreCase(primary, "en")) {
-            w.print(",en;q=0.{d}", .{q}) catch unreachable;
+        // A Chrome persona: Chrome's default list ends with en-US, en.
+        if (chrome and !std.ascii.eqlIgnoreCase(tag, "en-US")) {
+            w.print(",en-US;q=0.{d}", .{q}) catch unreachable;
+            q -= 1;
+        }
+        if (!english or chrome) {
+            if (!(chrome and std.ascii.eqlIgnoreCase(tag, "en"))) w.print(",en;q=0.{d}", .{q}) catch unreachable;
         }
         return w.buffered();
     }
@@ -1636,8 +1642,19 @@ test "Config: HttpHeaders.acceptLanguageFor" {
         .{ .tag = "zh-Hant-TW", .expected = "zh-Hant-TW,zh;q=0.9,en;q=0.8" },
     };
     for (cases) |case| {
-        var buf: [64]u8 = undefined;
-        try std.testing.expectEqualStrings(case.expected, HttpHeaders.acceptLanguageFor(&buf, case.tag));
+        var buf: [96]u8 = undefined;
+        try std.testing.expectEqualStrings(case.expected, HttpHeaders.acceptLanguageFor(&buf, case.tag, false));
+    }
+    // Chrome persona: Chrome's default accept-languages
+    const chrome_cases = [_]struct { tag: []const u8, expected: []const u8 }{
+        .{ .tag = "vi-VN", .expected = "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7" },
+        .{ .tag = "en-US", .expected = "en-US,en;q=0.9" },
+        .{ .tag = "en-GB", .expected = "en-GB,en-US;q=0.9,en;q=0.8" },
+        .{ .tag = "fr", .expected = "fr,en-US;q=0.9,en;q=0.8" },
+    };
+    for (chrome_cases) |case| {
+        var buf: [96]u8 = undefined;
+        try std.testing.expectEqualStrings(case.expected, HttpHeaders.acceptLanguageFor(&buf, case.tag, true));
     }
 }
 

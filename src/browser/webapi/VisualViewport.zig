@@ -46,6 +46,21 @@ pub fn getHeight(_: *const VisualViewport, frame: *Frame) u32 {
     return frame.page.getViewport().height;
 }
 
+// SellGravity antidetect: a phone zooms a 980 px layout out to fit its screen
+// (Chrome for Android's initial page scale). Always 1 otherwise.
+fn getScale(_: *const VisualViewport, frame: *Frame) f64 {
+    const lp = @import("lightpanda");
+    if (!lp.Persona.active) return 1.0;
+    const p = lp.Persona.get();
+    if (!p.mobile) return 1.0;
+    const device = p.inner_width orelse return 1.0;
+    const layout = frame.page.getViewport().width;
+    if (layout == 0 or layout == device) return 1.0;
+    // Chrome keeps the page scale as a float
+    const f: f32 = @as(f32, @floatFromInt(device)) / @as(f32, @floatFromInt(layout));
+    return f;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(VisualViewport);
 
@@ -62,5 +77,5 @@ pub const JsApi = struct {
     pub const pageTop = bridge.accessor(VisualViewport.getPageTop, null, .{});
     pub const width = bridge.accessor(VisualViewport.getWidth, null, .{});
     pub const height = bridge.accessor(VisualViewport.getHeight, null, .{});
-    pub const scale = bridge.property(1.0, .{ .template = false });
+    pub const scale = bridge.accessor(VisualViewport.getScale, null, .{});
 };

@@ -178,6 +178,11 @@ accept_language_override: ?lp.Config.HttpHeaders.AcceptLanguage = null,
 // an inbox for us to process (and there's someone to wake us up from a poll)
 driver: ?Driver = null,
 
+// SellGravity antidetect: Accept-CH, per origin (as Chrome's client hints
+// cache): the high-entropy hints a top-level response asked for, sent with
+// every later request to that origin.
+accept_ch: std.StringHashMapUnmanaged(u16) = .empty,
+
 // If there's a driver, it can tell us to disconnect and that has to stick
 // until _tick is called and picks it up.
 disconnected: bool = false,
@@ -271,6 +276,11 @@ pub fn init(self: *Client, app: *lp.App) !void {
 pub fn deinit(self: *Client) void {
     self.abort();
     self.processGraveyard();
+    {
+        var it = self.accept_ch.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.accept_ch.deinit(self.allocator);
+    }
 
     if (comptime lp.IS_DEBUG) {
         lp.assert(
@@ -515,6 +525,12 @@ pub fn baselineHeaders(self: *const Client) BaselineHeaders {
     // low-entropy client hints, in Chrome's order (before User-Agent). The
     // full version list is a high-entropy hint Chrome only sends on request.
     const persona = lp.Persona.get();
+    if (lp.Persona.active and persona.os == .ios) {
+        // Chrome for iOS is WebKit: no client hints at all
+        out.add(.{ .name = "User-Agent", .value = self.getUserAgent() });
+        out.add(.{ .name = "Accept-Language", .value = self.getAcceptLanguage() });
+        return out;
+    }
     if (lp.Persona.active and persona.sec_ch_ua != null) {
         out.add(.{ .name = "Sec-Ch-Ua", .value = persona.sec_ch_ua.?, .source = .fixed });
         out.add(.{ .name = "Sec-Ch-Ua-Mobile", .value = persona.secChUaMobile(), .source = .fixed });
@@ -4328,10 +4344,13 @@ pub const Transfer = struct {
     // 13x traffic). Names absent from a table (page-set headers) sit just
     // before the sec-fetch block, keeping their relative order.
     const chrome_navigate = [_][]const u8{
-        "connection",                "cache-control",   "sec-ch-ua",       "sec-ch-ua-mobile", "sec-ch-ua-platform",
-        "upgrade-insecure-requests", "user-agent",      "accept",          "content-length",   "content-type",
-        "origin",                    "sec-fetch-site",  "sec-fetch-mode",  "sec-fetch-user",   "sec-fetch-dest",
-        "referer",                   "accept-encoding", "accept-language", "cookie",           "priority",
+        "connection",             "cache-control",             "sec-ch-ua",                  "sec-ch-ua-mobile",
+        "sec-ch-ua-arch",         "sec-ch-ua-platform",        "sec-ch-ua-platform-version", "sec-ch-ua-model",
+        "sec-ch-ua-bitness",      "sec-ch-ua-full-version",    "sec-ch-ua-wow64",            "sec-ch-ua-full-version-list",
+        "sec-ch-ua-form-factors", "upgrade-insecure-requests", "user-agent",                 "accept",
+        "content-length",         "content-type",              "origin",                     "sec-fetch-site",
+        "sec-fetch-mode",         "sec-fetch-user",            "sec-fetch-dest",             "referer",
+        "accept-encoding",        "accept-language",           "cookie",                     "priority",
     };
     const chrome_cors = [_][]const u8{
         "connection",     "content-length", "sec-ch-ua-platform", "user-agent",      "accept",
@@ -4344,6 +4363,18 @@ pub const Transfer = struct {
         "sec-ch-ua-mobile", "accept",         "content-type",       "origin",          "sec-fetch-site",
         "sec-fetch-mode",   "sec-fetch-dest", "referer",            "accept-encoding", "accept-language",
         "cookie",           "priority",
+    };
+
+    // A fetch carrying Accept-CH hints (captured from Gravity Chromium:
+    // Blink's header map is hashed, so the extra names reshuffle it).
+    const chrome_fetch_hints = [_][]const u8{
+        "connection",     "content-length",             "sec-ch-ua-full-version-list", "sec-ch-ua-platform",
+        "sec-ch-ua",      "sec-ch-ua-bitness",          "sec-ch-ua-model",             "sec-ch-ua-mobile",
+        "sec-ch-ua-arch", "sec-ch-ua-full-version",     "sec-ch-ua-wow64",             "sec-ch-ua-form-factors",
+        "user-agent",     "sec-ch-ua-platform-version", "accept",                      "content-type",
+        "origin",         "sec-fetch-site",             "sec-fetch-mode",              "sec-fetch-dest",
+        "referer",        "accept-encoding",            "accept-language",             "cookie",
+        "priority",
     };
 
     fn chromeRank(table: []const []const u8, name: []const u8) u8 {
@@ -4378,10 +4409,12 @@ pub const Transfer = struct {
 
     fn addChromeOrderedHeaders(self: *Transfer, conn: *http.Connection, arena: Allocator) !void {
         const req = &self.req;
+        const hinted = self.findRequestHeader("sec-ch-ua-full-version-list") != null or self.findRequestHeader("sec-ch-ua-arch") != null or
+            self.findRequestHeader("sec-ch-ua-model") != null or self.findRequestHeader("sec-ch-ua-platform-version") != null;
         const table: []const []const u8 = switch (req.request_mode) {
             .navigate => &chrome_navigate,
-            .cors, .same_origin => if (self.findRequestHeader("origin") != null or req.method != .GET) &chrome_cors else &chrome_no_cors,
-            .no_cors => &chrome_no_cors,
+            .cors, .same_origin => if (hinted) &chrome_fetch_hints else if (self.findRequestHeader("origin") != null or req.method != .GET) &chrome_cors else &chrome_no_cors,
+            .no_cors => if (hinted) &chrome_fetch_hints else &chrome_no_cors,
         };
 
         var list: std.ArrayList(ChromeHeader) = try .initCapacity(arena, self.req_headers.items.len + 6);
@@ -4539,6 +4572,11 @@ pub const Transfer = struct {
             if (drop_hints and std.ascii.startsWithIgnoreCase(hdr.name, "Sec-Ch-")) continue;
             try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
         }
+        if (lp.Persona.active and !drop_hints and lp.Persona.get().sec_ch_ua != null) {
+            if (originOf(self.req.url)) |origin| {
+                if (self.client.accept_ch.get(origin)) |mask| try self.addAcceptChHints(mask);
+            }
+        }
 
         // --http-header extras; setHeader so a same-name header (e.g.
         // Accept-Language) overrides the baseline instead of duplicating.
@@ -4580,6 +4618,82 @@ pub const Transfer = struct {
         self.abortParked(error.AbortAuthChallenge);
     }
 
+    const ch_arch: u16 = 1 << 0;
+    const ch_bitness: u16 = 1 << 1;
+    const ch_full_version_list: u16 = 1 << 2;
+    const ch_model: u16 = 1 << 3;
+    const ch_platform_version: u16 = 1 << 4;
+    const ch_full_version: u16 = 1 << 5;
+    const ch_wow64: u16 = 1 << 6;
+    const ch_form_factors: u16 = 1 << 7;
+
+    fn acceptChMask(value: []const u8) u16 {
+        const names = [_]struct { []const u8, u16 }{
+            .{ "sec-ch-ua-arch", ch_arch },                           .{ "sec-ch-ua-bitness", ch_bitness },
+            .{ "sec-ch-ua-full-version-list", ch_full_version_list }, .{ "sec-ch-ua-model", ch_model },
+            .{ "sec-ch-ua-platform-version", ch_platform_version },   .{ "sec-ch-ua-full-version", ch_full_version },
+            .{ "sec-ch-ua-wow64", ch_wow64 },                         .{ "sec-ch-ua-form-factors", ch_form_factors },
+        };
+        var mask: u16 = 0;
+        var it = std.mem.tokenizeAny(u8, value, ", \t\r\n");
+        while (it.next()) |token| {
+            for (names) |n| {
+                if (std.ascii.eqlIgnoreCase(token, n[0])) mask |= n[1];
+            }
+        }
+        return mask;
+    }
+
+    // "https://a.b:8443/x?y" -> "https://a.b:8443"
+    fn originOf(url: []const u8) ?[]const u8 {
+        const scheme_end = std.mem.find(u8, url, "://") orelse return null;
+        const host_start = scheme_end + 3;
+        const end = std.mem.findAnyPos(u8, url, host_start, "/?#") orelse url.len;
+        return url[0..end];
+    }
+
+    fn addAcceptChHints(self: *Transfer, mask: u16) !void {
+        const p = lp.Persona.get();
+        const a = self.arena.allocator();
+        const q = struct {
+            fn f(al: Allocator, v: []const u8) ![]const u8 {
+                return std.fmt.allocPrint(al, "\"{s}\"", .{v});
+            }
+        }.f;
+        if (mask & ch_arch != 0) try self.addHeader("sec-ch-ua-arch", try q(a, p.uaArchitecture()), .{});
+        if (mask & ch_platform_version != 0) try self.addHeader("sec-ch-ua-platform-version", try q(a, p.platform_version), .{});
+        if (mask & ch_model != 0) try self.addHeader("sec-ch-ua-model", try q(a, p.model), .{});
+        if (mask & ch_bitness != 0) try self.addHeader("sec-ch-ua-bitness", try q(a, p.uaBitness()), .{});
+        if (mask & ch_full_version != 0) try self.addHeader("sec-ch-ua-full-version", try q(a, p.full_version), .{});
+        if (mask & ch_wow64 != 0) try self.addHeader("sec-ch-ua-wow64", "?0", .{});
+        if (mask & ch_full_version_list != 0) {
+            var w: std.Io.Writer.Allocating = .init(a);
+            for (p.brands_full[0..p.brand_count], 0..) |b, k| {
+                if (k > 0) try w.writer.writeAll(", ");
+                try w.writer.print("\"{s}\";v=\"{s}\"", .{ b.brand, b.version });
+            }
+            try self.addHeader("sec-ch-ua-full-version-list", w.written(), .{});
+        }
+        if (mask & ch_form_factors != 0) try self.addHeader("sec-ch-ua-form-factors", if (p.mobile) "\"Mobile\"" else "\"Desktop\"", .{});
+    }
+
+    // A top-level response's Accept-CH: remembered for its origin.
+    fn recordAcceptCh(self: *Transfer, line: []const u8) void {
+        if (!lp.Persona.active or self.req.request_mode != .navigate) return;
+        if (!lp.Persona.isTrustworthyUrl(self.req.url)) return;
+        const prefix = "accept-ch:";
+        if (!std.ascii.startsWithIgnoreCase(line, prefix)) return;
+        const origin = originOf(self.req.url) orelse return;
+        const mask = acceptChMask(line[prefix.len..]);
+        const client = self.client;
+        if (client.accept_ch.getPtr(origin)) |m| {
+            m.* = mask;
+            return;
+        }
+        const key = client.allocator.dupe(u8, origin) catch return;
+        client.accept_ch.put(client.allocator, key, mask) catch client.allocator.free(key);
+    }
+
     // The only reason we hook into this is to try to detect bad responses which
     // makes it so we can't re-use the connection. We're quick to return a
     // connection to the pool, so this is the first and last place we can check
@@ -4595,6 +4709,11 @@ pub const Transfer = struct {
             const conn: *http.Connection = @ptrCast(@alignCast(data));
             conn.transport.http.res.status_text = .fromStatusLine(line);
             return chunk_len;
+        }
+
+        if (line.len > 10 and (line[0] == 'a' or line[0] == 'A')) {
+            const c: *http.Connection = @ptrCast(@alignCast(data));
+            c.transport.http.recordAcceptCh(std.mem.trimEnd(u8, line, "\r\n"));
         }
 
         if (std.mem.trim(u8, line, "\r\n").len == 0) {

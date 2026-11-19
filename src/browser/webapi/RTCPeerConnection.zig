@@ -199,6 +199,10 @@ const GatherTask = struct {
             },
             .host => {
                 self.step = .complete;
+                // --webrtc-mode=disable / forward (UDP only through the
+                // proxy): Gravity Chromium gathers no host candidate.
+                const mode = Persona.get().webrtc_mode;
+                if (Persona.active and (mode == .disable or mode == .forward)) return if (pc._has_ice_servers) 240 else 3;
                 const candidate = try RTCIceCandidate.host(exec);
                 try pc.dispatchCandidate(candidate);
                 return if (pc._has_ice_servers) 240 else 3;

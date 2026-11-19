@@ -915,6 +915,8 @@ fn getOuterWidth(_: *const Window, frame: *Frame) u32 {
     const viewport = frame.page.getViewport();
     if (!Persona.active) return viewport.width;
     const p = Persona.get();
+    // a phone's window is the device screen, whatever the layout viewport
+    if (p.mobile and p.outer_width != null and frame.page.session.browser.viewport_override == null) return p.outer_width.?;
     const extra = (p.outer_width orelse viewport.width) -| (p.inner_width orelse viewport.width);
     return viewport.width + extra;
 }
@@ -923,6 +925,7 @@ fn getOuterHeight(_: *const Window, frame: *Frame) u32 {
     const viewport = frame.page.getViewport();
     if (!Persona.active) return viewport.height;
     const p = Persona.get();
+    if (p.mobile and p.outer_height != null and frame.page.session.browser.viewport_override == null) return p.outer_height.?;
     const extra = (p.outer_height orelse viewport.height) -| (p.inner_height orelse viewport.height);
     return viewport.height + extra;
 }

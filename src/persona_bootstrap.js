@@ -9,7 +9,7 @@
     delete N.globalPrivacyControl;
     delete N.modelContext;
     // Chrome for Android has no desktop-only hardware / window APIs.
-    if (navigator.userAgentData && navigator.userAgentData.mobile) {
+    if ((persona && persona.mobile) || (navigator.userAgentData && navigator.userAgentData.mobile)) {
       for (const k of ['hid', 'serial', 'keyboard', 'windowControlsOverlay', 'ink', 'managed', 'getInstalledRelatedApps', 'setAppBadge', 'clearAppBadge']) delete N[k];
     } else if (((persona && persona.chromeMajor) || 999) < 132) {
       // Device Posture API: Chrome 132+.
@@ -17,6 +17,8 @@
     }
     // Retired with the Privacy Sandbox ad APIs; absent from current Chrome.
     delete N.protectedAudience;
+    // Chrome for iOS is WebKit: no User-Agent Client Hints.
+    if (persona && persona.ios) delete N.userAgentData;
     if (typeof window !== 'undefined') {
       // for..in navigator walks Navigator.prototype in creation order, which
       // in Chrome is its IDL order; pixelscan hashes that list and compares it
@@ -314,7 +316,7 @@
   const tail = Array.from(new Set([...Object.getOwnPropertyNames(window).slice(-200), ...Object.keys(window).slice(-80)]));
   Object.defineProperty(window, 'chrome', {
     // configurable until reorderWindow() has put it in place
-    value: { app, csi, loadTimes }, writable: true, enumerable: true, configurable: true,
+    value: { loadTimes, csi, app }, writable: true, enumerable: true, configurable: true,
   });
   for (const k of tail) {
     const d = Object.getOwnPropertyDescriptor(window, k);
@@ -550,6 +552,28 @@
     for (const k of handlers) {
       let h = null;
       attr(k, function () { return h; }, function (fn) { h = typeof fn === 'function' || (fn && typeof fn === 'object') ? fn : null; });
+    }
+    // A touch device: the touch event handler attributes exist (window,
+    // elements, document) and work like any on* attribute.
+    if (persona && persona.mobile) {
+      for (const k of ['ontouchstart', 'ontouchend', 'ontouchmove', 'ontouchcancel']) {
+        const type = k.slice(2);
+        const store = new WeakMap();
+        const get = function () { const e = store.get(this); return e ? e.h : null; };
+        const set = function (fn) {
+          const cur = store.get(this);
+          if (cur) this.removeEventListener(type, cur.l);
+          const h = typeof fn === 'function' || (fn && typeof fn === 'object') ? fn : null;
+          if (!h) { store.delete(this); return; }
+          const l = function (ev) { const r = typeof h === 'function' ? h.call(this, ev) : null; if (r === false) ev.preventDefault(); };
+          store.set(this, { h, l });
+          this.addEventListener(type, l);
+        };
+        attr(k, get, set);
+        for (const P of [W.HTMLElement && W.HTMLElement.prototype, W.Document && W.Document.prototype, W.SVGElement && W.SVGElement.prototype]) {
+          if (P && !Object.prototype.hasOwnProperty.call(P, k)) Object.defineProperty(P, k, { get: makeNative('get ' + k, 0, get), set: makeNative('set ' + k, 1, set), enumerable: true, configurable: true });
+        }
+      }
     }
     attr('crossOriginIsolated', function () { return false; });
     attr('originAgentCluster', function () { return false; });
@@ -872,7 +896,7 @@
     const getter = (T, k, impl) => Object.defineProperty(T, k, { get: makeNative('get ' + k, 0, impl), enumerable: true, configurable: true });
     const argc = (iface, k, len, n) => { if (n < len) throw new TypeError("Failed to execute '" + k + "' on '" + iface + "': " + len + ' argument' + (len > 1 ? 's' : '') + ' required, but only ' + n + ' present.'); };
     const reject = (err) => Promise.reject(err);
-    const mobile = !!(G.navigator && navigator.userAgentData && navigator.userAgentData.mobile);
+    const mobile = !!((persona && persona.mobile) || (G.navigator && navigator.userAgentData && navigator.userAgentData.mobile));
 
     // setlike / maplike backing: Blink's read-only collections.
     const collection = (C, kind) => {

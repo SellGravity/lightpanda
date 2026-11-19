@@ -276,7 +276,17 @@ destroying: bool = false,
 // across page navigations; delegate to it here, keeping a single read path for
 // every viewport consumer.
 pub fn getViewport(self: *const Page) Viewport {
-    return self.session.browser.getViewport();
+    var vp = self.session.browser.getViewport();
+    // A phone persona lays a page without <meta name=viewport> out 980 px
+    // wide, the height following the screen's aspect (Chrome for Android).
+    if (lp.Persona.active and lp.Persona.get().mobile and self.session.browser.viewport_override == null and vp.width > 0) {
+        const lw = self.frame._mobile_layout_width orelse 980;
+        if (lw != vp.width) {
+            vp.height = @intFromFloat(@ceil(@as(f64, @floatFromInt(lw)) * @as(f64, @floatFromInt(vp.height)) / @as(f64, @floatFromInt(vp.width))));
+            vp.width = lw;
+        }
+    }
+    return vp;
 }
 
 pub fn viewportChanged(self: *Page) void {

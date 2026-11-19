@@ -128,7 +128,9 @@ fn getMaxTouchPoints(_: *const Navigator) u32 {
 }
 
 pub fn getVendor(_: *const Navigator) []const u8 {
-    // Chrome personas: every Chromium build reports Google Inc.
+    // Chrome personas: every Chromium build reports Google Inc.; Chrome for
+    // iOS is WebKit.
+    if (Persona.active and Persona.get().os == .ios) return "Apple Computer, Inc.";
     if (Persona.active and Persona.get().chrome_major > 0) return "Google Inc.";
     return "";
 }
