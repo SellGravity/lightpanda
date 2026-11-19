@@ -291,10 +291,11 @@ const ScheduleCallback = struct {
                 self.invoke(&ls.local, .{IdleDeadline{}}, "idleCallback");
             },
             .animation_frame => {
-                const now = switch (self.exec.js.global) {
+                const perf_now = switch (self.exec.js.global) {
                     .frame => |frame| frame.window._performance.now(),
                     .worker => |worker| worker._performance.now(),
                 };
+                const now = if (lp.Persona.active) frameTime(perf_now) else perf_now;
                 const was_in_animation_frame = timers._in_animation_frame;
                 timers._in_animation_frame = true;
                 defer timers._in_animation_frame = was_in_animation_frame;
@@ -318,3 +319,19 @@ const ScheduleCallback = struct {
         return null;
     }
 };
+
+// SellGravity antidetect: a 60 Hz display for requestAnimationFrame.
+const frame_period_ms: f64 = 1000.0 / 60.0;
+
+/// Milliseconds until the next vsync after `now` (performance.now()).
+pub fn vsyncDelay(now: f64) u32 {
+    const next = (@floor(now / frame_period_ms) + 1) * frame_period_ms;
+    return @max(1, @as(u32, @intFromFloat(@ceil(next - now))));
+}
+
+/// The frame's start time, as Chrome hands it to every callback of the
+/// frame: the vsync at or before `now`, in whole 100µs (3078.2).
+pub fn frameTime(now: f64) f64 {
+    const vsync = @floor(now / frame_period_ms) * frame_period_ms;
+    return @round(vsync * 10.0) / 10.0;
+}

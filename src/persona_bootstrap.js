@@ -890,6 +890,27 @@
       Object.defineProperty(P, Symbol.iterator, { value: iter, writable: true, enumerable: false, configurable: true });
     };
 
+    // --- document.timeline: the current animation frame's time ------------
+    // (60 Hz vsync, whole 100µs, the value rAF callbacks get), never null.
+    if (typeof G.AnimationTimeline === 'function' && typeof G.DocumentTimeline === 'function') {
+      const period = 1000 / 60;
+      const perfNow = performance.now.bind(performance), later = G.setTimeout.bind(G);
+      // only advances between tasks (at rendering), like Chrome's
+      let frameTime = null;
+      getter(G.AnimationTimeline.prototype, 'currentTime', function () {
+        if (!(this instanceof G.AnimationTimeline)) throw new TypeError('Illegal invocation');
+        if (frameTime === null) {
+          frameTime = Math.round(Math.floor(perfNow() / period) * period * 10) / 10;
+          later(() => { frameTime = null; }, 0);
+        }
+        return frameTime;
+      });
+      getter(G.AnimationTimeline.prototype, 'duration', function () {
+        if (!(this instanceof G.AnimationTimeline)) throw new TypeError('Illegal invocation');
+        return null;
+      });
+    }
+
     // --- Trusted Types ----------------------------------------------------
     // Loaders (Cloudflare Turnstile among them) create a policy whenever
     // trustedTypes exists and pass its output to innerHTML / script.src.

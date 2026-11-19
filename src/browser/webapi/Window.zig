@@ -466,7 +466,10 @@ pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?i32,
 }
 
 pub fn requestAnimationFrame(self: *Window, cb: js.Function.Global, exec: *js.Execution) !u32 {
-    return self._timers.schedule(exec, cb, 5, .{
+    // With a persona, frames follow a 60 Hz display (a 5 ms loop is a
+    // 200 fps tell): the callback waits for the next vsync.
+    const delay: u32 = if (lp.Persona.active) Timers.vsyncDelay(self._performance.now()) else 5;
+    return self._timers.schedule(exec, cb, delay, .{
         .repeat = false,
         .params = &.{},
         .mode = .animation_frame,
