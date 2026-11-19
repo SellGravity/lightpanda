@@ -95,7 +95,7 @@ Phía launcher (gravbrowser) **đã làm** trên nhánh `feat/lightpanda-engine`
 - [x] `electron/modules/lightpanda/lightpanda-engine.ts`: spawn qua `wsl.exe -d <distro> -e /opt/invipanda/invipanda` (ghi đè bằng `INVIPANDA_WSL_DISTRO` / `INVIPANDA_BIN`), kill process Linux theo cổng debug.
 - [x] Launcher: kiểm tra runtime (`INVIPANDA_RUNTIME_NOT_FOUND`), user-data-dir riêng, bỏ extension, profile giới hạn URL thì từ chối chạy; dừng êm bằng CDP `Browser.close`, dừng cưỡng bức kill cả process Linux.
 - [x] `cdp.service`: chỉ Firefox là không có CDP, nên automation/API ngoài chạy được trên InviPanda.
-- [ ] Truyền `--ua-full-version` (bản build Chrome đầy đủ) từ fingerprint.
+- [x] Bản build đầy đủ: không cần truyền `--ua-full-version` nữa. UA có build đầy đủ (`Chrome/143.0.7490.0`) thì gửi UA rút gọn và dùng build cho client hints; UA đã rút gọn thì lấy build thật của bản phát hành + patch riêng từng profile.
 - [ ] Phân phối runtime: `scripts/invipanda-package.sh` → `dist/invipanda-linux-x86_64.tar.gz`, cài bằng `scripts/invipanda-install-wsl.sh`.
 
 ## 6. Build và test
