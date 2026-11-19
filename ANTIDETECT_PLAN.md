@@ -125,6 +125,7 @@ Phía engine, để khớp đúng cách `cdp.service.ts` và API ngoài dùng CD
 - **Cookie lưu theo profile**: `<user-data-dir>/InviPanda/Cookies.json` được nạp khi khởi động và ghi lại khi cookie đổi (tối đa 1 lần/giây; ghi ngay khi xoá cookie hoặc khi trang tải xong). Seed cookie của launcher, vốn chỉ áp một lần, vẫn còn sau khi khởi động lại.
 - **Dialog chặn script như Chrome**: `alert`/`confirm`/`prompt` chờ `Page.handleJavaScriptDialog`. Lệnh `Input.*` mở dialog được trả lời ngay, nên node "click" rồi node "accept alert" chạy đúng như trên Chrome. Nếu không ai trả lời trong 10 giây, dialog bị đóng cho script, và một `handleJavaScriptDialog` đến muộn vẫn thành công.
 - `Emulation.setPageScaleFactor` có hỗ trợ.
+- **Vị trí theo IP** (`--location-mode=<perm>,ip`, mặc định của InviBrowser): giống Gravity Chromium, lúc khởi động InviPanda tra toạ độ của IP đi ra **qua proxy của profile** (thử lần lượt ip-api.com, ipwho.is, ipinfo.io), trên một thread riêng, rồi trả độ chính xác cỡ thành phố (khoảng 1,5 km). Ở chế độ `ask`, `getCurrentPosition` chờ mãi như một prompt chưa ai trả lời, thay vì bị từ chối ngay (từ chối ngay trong khi quyền vẫn là "prompt" là dấu hiệu headless).
 - Kiểm chứng bằng harness `invi-compat.mjs`: launch giống hệt gravbrowser, gọi hơn 55 method CDP mà app dùng, kiểm tra reconnect, takeover, switchToTarget và cookie sau khi khởi động lại. Kết quả **64/64**.
 
 ## 6. Build và test

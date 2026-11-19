@@ -334,6 +334,7 @@ pub fn run(self: *Server) void {
         return;
     };
 
+    lp.persona_geo.start(self.app);
     if (lp.Persona.active and self.protocols.cdp and self.persistent_cdp == null) {
         self.persistent_cdp = self.spawnWorker(.cdp, .persistent) catch |err| blk: {
             log.err(.serve, "persistent browser", .{ .err = err });

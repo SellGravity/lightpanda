@@ -30,6 +30,7 @@ pub const Arena = @import("Arena.zig");
 pub const Regex = @import("Regex.zig");
 pub const Config = @import("Config.zig");
 pub const Persona = @import("Persona.zig");
+pub const persona_geo = @import("persona_geo.zig");
 pub const completion = @import("completion.zig");
 pub const cookies = @import("cookies.zig");
 pub const datetime = @import("datetime.zig");

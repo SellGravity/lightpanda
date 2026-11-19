@@ -170,15 +170,25 @@ const Request = struct {
         // permission and supplies the position (Chromium-fork parity).
         const persona = lp.Persona.get();
         const persona_allows = lp.Persona.active and persona.location_mode == .allow;
-        if (!persona_allows and (browser.permissions.get("geolocation") orelse .prompt != .granted)) {
+        const granted = (browser.permissions.get("geolocation") orelse .prompt) == .granted;
+        if (!persona_allows and !granted) {
+            // `ask`: Chrome shows a prompt and the call waits on it; nobody
+            // answers it here, so it never settles (an instant denial while
+            // the permission reads "prompt" is a headless tell).
+            if (lp.Persona.active and persona.location_mode == .ask) return null;
             self.deliverError(.permission_denied);
             return null;
         }
 
-        const persona_override: ?Override = if (lp.Persona.active and persona.latitude != null and persona.longitude != null)
-            .{ .latitude = persona.latitude.?, .longitude = persona.longitude.?, .accuracy = 20 + persona.noiseOffset(0x67656f, "accuracy", 15) }
-        else
-            null;
+        var persona_override: ?Override = null;
+        if (lp.Persona.active and persona.latitude != null and persona.longitude != null) {
+            persona_override = .{ .latitude = persona.latitude.?, .longitude = persona.longitude.?, .accuracy = 20 + persona.noiseOffset(0x67656f, "accuracy", 15) };
+        } else if (lp.Persona.active and persona.location_ip) {
+            // an IP-based fix: city-level, as Chrome's network provider reports
+            if (lp.persona_geo.coordinates()) |c| {
+                persona_override = .{ .latitude = c.latitude, .longitude = c.longitude, .accuracy = 1500 + persona.noiseOffset(0x67656f, "accuracy", 900) };
+            }
+        }
 
         const override = browser.geolocation_override orelse persona_override orelse {
             self.deliverError(.position_unavailable);

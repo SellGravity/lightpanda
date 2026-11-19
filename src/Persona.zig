@@ -104,6 +104,8 @@ webrtc_mode: WebRtcMode = .default,
 location_mode: LocationMode = .default,
 latitude: ?f64 = null,
 longitude: ?f64 = null,
+// `--location-mode=<perm>,ip`: the position is the exit IP's (persona_geo)
+location_ip: bool = false,
 media_device_count: [3]u8 = .{ 1, 1, 1 }, // audioinput, videoinput, audiooutput
 /// --font-exclusion-list: families this profile does not have.
 font_exclusion: ?[]const u8 = null,
@@ -667,6 +669,10 @@ fn parseLocation(self: *Persona, value: []const u8) void {
     const mode = it.next() orelse return;
     self.location_mode = std.meta.stringToEnum(LocationMode, mode) orelse .default;
     const lat = it.next() orelse return;
+    if (std.mem.eql(u8, std.mem.trim(u8, lat, " "), "ip")) {
+        self.location_ip = true;
+        return;
+    }
     const lng = it.next() orelse return;
     self.latitude = std.fmt.parseFloat(f64, lat) catch null;
     self.longitude = std.fmt.parseFloat(f64, lng) catch null;
