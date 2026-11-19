@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
@@ -69,7 +70,16 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 fn enable(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     try target.runtimeEnable();
-    return sendInspector(cmd);
+    try sendInspector(cmd);
+    if (lp.Persona.active) {
+        // V8's Runtime.enable turns on stack capture for uncaught exceptions:
+        // every throw then walks the stack to predict its catcher, making
+        // exceptions several times slower - the timing pages measure to spot
+        // an automation client (deviceandbrowserinfo runtimePerf). Turn it
+        // back off; Runtime.exceptionThrown is built here, without it.
+        const isolate = target.session.browser.env.isolate.handle;
+        js.v8.v8__Isolate__SetCaptureStackTraceForUncaughtExceptions(isolate, false, 0);
+    }
 }
 
 fn disable(cmd: *CDP.Command) !void {
