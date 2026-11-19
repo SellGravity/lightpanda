@@ -1234,6 +1234,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/net/EventSource.zig"),
     @import("../webapi/event/CloseEvent.zig"),
+    @import("../webapi/event/RTCPeerConnectionIceEvent.zig"),
     @import("../webapi/streams/ReadableStream.zig"),
     @import("../webapi/streams/ReadableStreamDefaultReader.zig"),
     @import("../webapi/streams/ReadableStreamDefaultController.zig"),

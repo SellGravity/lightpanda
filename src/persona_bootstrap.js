@@ -260,6 +260,15 @@
   }
 
   const parityTable = persona && persona.parity;
+  // Chrome's window chain: Window.prototype -> WindowProperties (the named
+  // properties object) -> EventTarget.prototype. Lightpanda serves named
+  // access from the global itself, so only the object is missing.
+  if (typeof Window === 'function' && typeof EventTarget === 'function' && Object.getPrototypeOf(Window.prototype) === EventTarget.prototype) {
+    const wp = Object.create(EventTarget.prototype);
+    Object.defineProperty(wp, Symbol.toStringTag, { value: 'WindowProperties', writable: false, enumerable: false, configurable: true });
+    Object.setPrototypeOf(Window.prototype, wp);
+  }
+  immutableGlobalChain();
   if (typeof window === 'undefined') {
     if (major > 0) {
       webgl2Split();
@@ -729,6 +738,25 @@
     const argc = (iname, k, len, n) => {
       if (n < len) throw new TypeError("Failed to execute '" + k + "' on '" + iname + "': " + len + ' argument' + (len > 1 ? 's' : '') + ' required, but only ' + n + ' present.');
     };
+    // A default of the member's WebIDL return type (code from the table):
+    // feature-detecting code that calls a member must get the kind of value
+    // it expects (a Promise, an object), never undefined.
+    const gated = /^(Clipboard|CredentialsContainer|WakeLock|USB|HID|Serial|Bluetooth|Presentation|PresentationRequest|EyeDropper|PaymentRequest|IdleDetector|IdentityCredential|DigitalCredential|NavigatorLogin|XRSystem|DocumentPictureInPicture|StorageAccessHandle|MediaDevices)$/;
+    const defaultFor = (tc, iname) => {
+      if (!tc) return undefined;
+      switch (tc[0]) {
+        case 'b': return false;
+        case 'n': return 0;
+        case 's': return '';
+        case 'a': return [];
+        case 'N': return null;
+        case 'I': { const I = G[tc.slice(1)]; return typeof I === 'function' && I.prototype ? Object.create(I.prototype) : null; }
+        case 'P':
+          if (gated.test(iname)) return Promise.reject(new DOMException('The request is not allowed by the user agent or the platform in the current context.', 'NotAllowedError'));
+          return Promise.resolve(defaultFor(tc.slice(1), iname));
+        default: return undefined;
+      }
+    };
     const main = table.split('\n#EXT\n')[0];
     for (const seg of main.split(';')) {
       const gt = seg.indexOf('>');
@@ -745,7 +773,9 @@
         if (at >= 0 && +it.slice(at + 1) > major) continue;
         const body = at < 0 ? it : it.slice(0, at);
         const c = body.lastIndexOf(':');
-        const k = body.slice(0, c), code = body.slice(c + 1), kind = code[0];
+        const k = body.slice(0, c), full = body.slice(c + 1);
+        const eq = full.indexOf('=');
+        const code = eq < 0 ? full : full.slice(0, eq), tc = eq < 0 ? '' : full.slice(eq + 1), kind = code[0];
         try {
           const own = Object.getOwnPropertyDescriptor(T, k);
           if (kind === 'c') {
@@ -759,9 +789,16 @@
               const f = up.value;
               impl = function () { return f.apply(this, arguments); };
             } else if (stat) {
-              impl = function () { argc(iname, k, len, arguments.length); return undefined; };
+              impl = function () { argc(iname, k, len, arguments.length); return defaultFor(tc, iname); };
+            } else if (tc[0] === 'P') {
+              // Promise-returning operations reject instead of throwing.
+              impl = function () {
+                if (!branded(C, this)) return Promise.reject(new TypeError('Illegal invocation'));
+                try { argc(iname, k, len, arguments.length); } catch (e) { return Promise.reject(e); }
+                return defaultFor(tc, iname);
+              };
             } else {
-              impl = function () { if (!branded(C, this)) illegal(); argc(iname, k, len, arguments.length); return undefined; };
+              impl = function () { if (!branded(C, this)) illegal(); argc(iname, k, len, arguments.length); return defaultFor(tc, iname); };
             }
             Object.defineProperty(T, k, { value: makeNative(k, len, impl), writable: true, enumerable: true, configurable: true });
           } else if (kind === 'g' || kind === 's') {
@@ -778,7 +815,12 @@
               get = function () {
                 if (!stat && !branded(C, this)) illegal();
                 const s = slots.get(this);
-                return s && hop.call(s, k) ? s[k] : null;
+                if (s && hop.call(s, k)) return s[k];
+                if (handler || !tc || tc === 'N' || tc === 'u') return null;
+                // Same object on every read, like a real attribute.
+                const v = defaultFor(tc, iname);
+                if (v !== null && typeof v === 'object') slot(this)[k] = v;
+                return v;
               };
               set = function (v) {
                 if (!stat && !branded(C, this)) illegal();
@@ -845,6 +887,68 @@
       const iter = kind === 'map' ? P.entries : P.values;
       Object.defineProperty(P, Symbol.iterator, { value: iter, writable: true, enumerable: false, configurable: true });
     };
+
+    // --- Trusted Types ----------------------------------------------------
+    // Loaders (Cloudflare Turnstile among them) create a policy whenever
+    // trustedTypes exists and pass its output to innerHTML / script.src.
+    if (typeof G.TrustedTypePolicyFactory === 'function' && typeof G.TrustedTypePolicy === 'function') {
+      const kinds = [['TrustedHTML', 'createHTML'], ['TrustedScript', 'createScript'], ['TrustedScriptURL', 'createScriptURL']];
+      const values = new WeakMap();
+      const make = (iface, v) => { const o = Object.create(G[iface].prototype); values.set(o, String(v)); return o; };
+      for (const [iface] of kinds) {
+        const I = G[iface];
+        if (typeof I !== 'function') continue;
+        const str = function () { if (!values.has(this)) throw new TypeError('Illegal invocation'); return values.get(this); };
+        method(I.prototype, 'toString', 0, str);
+        method(I.prototype, 'toJSON', 0, str);
+      }
+      const PP = G.TrustedTypePolicy.prototype;
+      getter(PP, 'name', function () { const s = slots.get(this); if (!s) throw new TypeError('Illegal invocation'); return s.name; });
+      for (const [iface, fn] of kinds) {
+        method(PP, fn, 1, function (input) {
+          const s = slots.get(this);
+          if (!s) throw new TypeError('Illegal invocation');
+          const rule = s.rules && s.rules[fn];
+          if (typeof rule !== 'function') throw new TypeError("Failed to execute '" + fn + "' on 'TrustedTypePolicy': Policy " + s.name + "'s TrustedTypePolicyOptions did not specify a '" + fn + "' member.");
+          const r = rule.apply(undefined, [String(input), ...Array.prototype.slice.call(arguments, 1)]);
+          return make(iface, r == null ? '' : r);
+        });
+      }
+      const FP = G.TrustedTypePolicyFactory.prototype;
+      let defaultPolicy = null;
+      method(FP, 'createPolicy', 1, function (name, rules) {
+        if (arguments.length < 1) throw new TypeError("Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': 1 argument required, but only 0 present.");
+        const n = String(name);
+        if (n === 'default' && defaultPolicy) throw new TypeError("Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"default\" already exists.");
+        const p = inst(G.TrustedTypePolicy, { name: n, rules: rules ? { createHTML: rules.createHTML, createScript: rules.createScript, createScriptURL: rules.createScriptURL } : {} });
+        if (n === 'default') defaultPolicy = p;
+        return p;
+      });
+      const isA = (iface) => function (v) { return v !== null && typeof v === 'object' && values.has(v) && v instanceof G[iface]; };
+      method(FP, 'isHTML', 1, isA('TrustedHTML'));
+      method(FP, 'isScript', 1, isA('TrustedScript'));
+      method(FP, 'isScriptURL', 1, isA('TrustedScriptURL'));
+      const emptyHTML = make('TrustedHTML', ''), emptyScript = make('TrustedScript', '');
+      getter(FP, 'emptyHTML', function () { return emptyHTML; });
+      getter(FP, 'emptyScript', function () { return emptyScript; });
+      getter(FP, 'defaultPolicy', function () { return defaultPolicy; });
+      const attrTypes = { script: { src: 'TrustedScriptURL' }, iframe: { srcdoc: 'TrustedHTML' }, embed: { src: 'TrustedScriptURL' }, object: { data: 'TrustedScriptURL', codebase: 'TrustedScriptURL' } };
+      method(FP, 'getAttributeType', 2, function (tag, attr) {
+        const t = attrTypes[String(tag).toLowerCase()];
+        const a = String(attr).toLowerCase();
+        if (t && t[a]) return t[a];
+        return a.startsWith('on') ? 'TrustedScript' : null;
+      });
+      method(FP, 'getPropertyType', 2, function (tag, prop) {
+        const p = String(prop);
+        if (p === 'innerHTML' || p === 'outerHTML') return 'TrustedHTML';
+        const tg = String(tag).toLowerCase();
+        if (tg === 'script' && (p === 'text' || p === 'textContent' || p === 'innerText')) return 'TrustedScript';
+        if (tg === 'script' && p === 'src') return 'TrustedScriptURL';
+        if (tg === 'iframe' && p === 'srcdoc') return 'TrustedHTML';
+        return null;
+      });
+    }
 
     // --- WebGL: extension objects and WebGL 2 parameters ------------------
     const GL1 = G.WebGLRenderingContext, GL2 = G.WebGL2RenderingContext;
@@ -1138,6 +1242,54 @@
     }
     for (const k of ['WEBGL_debug_renderer_info', 'WEBGL_lose_context']) {
       if (hop.call(G, k)) { try { delete G[k]; } catch (e) { /* keep */ } }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // The global object and every object on its prototype chain have an
+  // immutable [[Prototype]] (HTML "immutable prototype exotic objects"; V8
+  // SetImmutableProto): setting it to anything else throws. Lightpanda's
+  // templates don't set the flag, and bot checks probe exactly this.
+  // ---------------------------------------------------------------------
+  function immutableGlobalChain() {
+    const G = self;
+    const locked = new Map();
+    const label = (o) => {
+      const c = o && Object.prototype.hasOwnProperty.call(o, 'constructor') ? o.constructor : Object.getPrototypeOf(o) && Object.getPrototypeOf(o).constructor;
+      return c && c.name ? c.name : 'Object';
+    };
+    for (let o = G; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+      // window and Window.prototype both report as #<Window>
+      locked.set(o, o === G ? label(Object.getPrototypeOf(G)) : label(o));
+    }
+    const fail = (o) => new TypeError("Immutable prototype object '#<" + locked.get(o) + ">' cannot have their prototype set");
+    const blocked = (o, proto) => locked.has(o) && proto !== Object.getPrototypeOf(o);
+    const setProto = Object.setPrototypeOf, reflectSet = Reflect.setPrototypeOf;
+    Object.defineProperty(Object, 'setPrototypeOf', {
+      value: makeNative('setPrototypeOf', 2, function (o, proto) {
+        if (blocked(o, proto)) throw fail(o);
+        return setProto(o, proto);
+      }),
+      writable: true, enumerable: false, configurable: true,
+    });
+    Object.defineProperty(Reflect, 'setPrototypeOf', {
+      value: makeNative('setPrototypeOf', 2, function (o, proto) {
+        if (blocked(o, proto)) return false;
+        return reflectSet(o, proto);
+      }),
+      writable: true, enumerable: false, configurable: true,
+    });
+    const d = Object.getOwnPropertyDescriptor(Object.prototype, '__proto__');
+    if (d && d.set) {
+      const set = d.set;
+      Object.defineProperty(Object.prototype, '__proto__', {
+        get: d.get,
+        set: makeNative('set __proto__', 1, function (proto) {
+          if (blocked(this, proto)) throw fail(this);
+          return set.call(this, proto);
+        }),
+        enumerable: false, configurable: true,
+      });
     }
   }
 })

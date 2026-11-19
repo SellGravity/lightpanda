@@ -1844,11 +1844,38 @@ pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
 /// profile, applied at the JS boundary only (IntersectionObserver and
 /// internal layout use the exact values), so geometry stays consistent while
 /// rect-based fingerprints differ across profiles.
+// Chrome lays boxes out in LayoutUnits (1/64 px), so every rect it reports
+// sits on that grid; values off it (59.99986...) give a noise layer away. With
+// a persona, rects are snapped to the grid, and the per-profile noise moves
+// some fractional edges by one unit: a stable, Chrome-shaped difference
+// between profiles.
 fn rectsNoise(d: DOMRect.Data) DOMRect.Data {
+    if (!lp.Persona.active) return d;
     const p = lp.Persona.get();
-    if (!lp.Persona.active or !p.rects_noise) return d;
-    const k = 1.0 + p.noiseOffset(lp.Persona.salt_rects, "scale", 4.0e-6);
-    return .{ .x = d.x * k, .y = d.y * k, .width = d.width * k, .height = d.height * k };
+    const noisy = p.rects_noise;
+    return .{
+        .x = layoutUnit(p, d.x, noisy),
+        .y = layoutUnit(p, d.y, noisy),
+        .width = layoutUnit(p, d.width, noisy),
+        .height = layoutUnit(p, d.height, noisy),
+    };
+}
+
+fn layoutUnit(p: *const lp.Persona, v: f64, noisy: bool) f64 {
+    if (!std.math.isFinite(v)) return v;
+    var units = @round(v * 64.0);
+    // Whole pixels (CSS sizes, the viewport) stay put; fractional ones come
+    // from text and fonts, where real machines differ.
+    if (noisy and @mod(units, 64.0) != 0) {
+        const key: i64 = @intFromFloat(units);
+        // one edge in four moves by a unit, the same way every time
+        switch (p.noise(lp.Persona.salt_rects, std.mem.asBytes(&key)) & 7) {
+            0 => units += 1,
+            1 => units -= 1,
+            else => {},
+        }
+    }
+    return units / 64.0;
 }
 
 pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
