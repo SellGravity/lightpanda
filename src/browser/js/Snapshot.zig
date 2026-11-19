@@ -934,7 +934,11 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
 
                 {
-                    const flags = if (value.readonly) v8.ReadOnly + v8.DontDelete else 0;
+                    // WebIDL constants (UPPER_CASE) are non-configurable. A read-only
+                    // attribute served as a fixed value stays configurable, so the
+                    // persona bootstrap can turn it into the accessor Chrome has.
+                    const constant = comptime isConstantName(name);
+                    const flags = if (value.readonly) (if (constant) v8.ReadOnly + v8.DontDelete else v8.ReadOnly) else 0;
                     v8.v8__Template__Set(@ptrCast(prototype), js_name, js_value, flags);
                 }
 
@@ -1077,4 +1081,11 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, i
             .attribute = attribute,
         });
     }
+}
+
+fn isConstantName(comptime name: []const u8) bool {
+    for (name) |c| {
+        if (!(std.ascii.isUpper(c) or std.ascii.isDigit(c) or c == '_')) return false;
+    }
+    return name.len > 0;
 }

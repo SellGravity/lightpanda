@@ -32,6 +32,7 @@ const render = @import("render.zig");
 const AudioParam = @import("AudioParam.zig");
 const BaseAudioContext = @import("BaseAudioContext.zig");
 const GainNode = @import("GainNode.zig");
+const AnalyserNode = @import("AnalyserNode.zig");
 const ConvolverNode = @import("ConvolverNode.zig");
 const AudioDestinationNode = @import("AudioDestinationNode.zig");
 const DynamicsCompressorNode = @import("DynamicsCompressorNode.zig");
@@ -63,6 +64,7 @@ _rendered: u64 = 0,
 _pulling: bool = false,
 
 pub const Type = enum(u8) {
+    analyser,
     convolver,
     destination,
     dynamics_compressor,
@@ -72,6 +74,7 @@ pub const Type = enum(u8) {
 
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
+        .analyser => AnalyserNode,
         .convolver => ConvolverNode,
         .destination => AudioDestinationNode,
         .dynamics_compressor => DynamicsCompressorNode,
@@ -376,6 +379,7 @@ pub fn pull(self: *AudioNode, r: *render.Quantum) anyerror!*const Bus {
     const input = if (self._inputs > 0) try self.pullInput(r) else null;
     switch (self._type) {
         .destination => {},
+        .analyser => try self.subtype(AnalyserNode).process(r, input.?, &self._output),
         .convolver => try self.subtype(ConvolverNode).process(r, input.?, &self._output),
         .gain => try self.subtype(GainNode).process(r, input.?, &self._output),
         .dynamics_compressor => try self.subtype(DynamicsCompressorNode).process(r, input.?, &self._output),

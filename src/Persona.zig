@@ -112,6 +112,24 @@ timezone: ?[]const u8 = null,
 /// --speech-voices: full (OS + Chrome network voices), os, none.
 speech_voices: enum { full, os, none } = .full,
 
+/// Classic scrollbar thickness in CSS px for the persona's platform, 0
+/// without a persona (Lightpanda's own behaviour) and where scrollbars
+/// overlay the content (macOS, mobile). Chrome on Windows 11 draws the
+/// thinner Fluent scrollbars.
+pub fn scrollbarWidth() f64 {
+    if (!active) return 0;
+    const p = &current;
+    if (p.mobile) return 0;
+    return switch (p.os) {
+        .windows => blk: {
+            const major = std.fmt.parseInt(u32, std.mem.sliceTo(p.platform_version, '.'), 10) catch 0;
+            break :blk if (major >= 13 and p.chrome_major >= 124) 15 else 17;
+        },
+        .linux, .chromeos => 15,
+        else => 0,
+    };
+}
+
 pub fn get() *const Persona {
     return &current;
 }
@@ -989,6 +1007,12 @@ test "Persona: translateArgs rewrites a launcher argv" {
 /// page scripts: removes APIs Chrome does not have and adds `window.chrome`.
 /// Functions are bound so their toString() reads "[native code]".
 pub const bootstrap_js: []const u8 = @embedFile("persona_bootstrap.js");
+
+/// Chrome prototype members Lightpanda lacks, for the bootstrap to fill in:
+/// generated from a Chrome dump, Lightpanda's own surface and MDN's
+/// browser-compat-data (the release that shipped each member). Format in
+/// persona_bootstrap.js, parity().
+pub const parity_table: []const u8 = @embedFile("persona_parity.txt");
 
 /// https/wss, or a loopback http origin (what Chrome calls potentially
 /// trustworthy for client hints).

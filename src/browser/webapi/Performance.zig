@@ -121,12 +121,46 @@ pub fn getTiming(self: *Performance) *PerformanceTiming {
 pub fn now(self: *const Performance) f64 {
     const current = highResTimestamp();
     const elapsed = current - self._time_origin;
-    // Return as milliseconds with microsecond precision
-    return @as(f64, @floatFromInt(elapsed)) / 1000.0;
+    return toMillis(elapsed);
+}
+
+/// A time-origin relative duration in milliseconds. With a persona, clamped
+/// like Chrome's TimeClamper: 100µs steps (not cross-origin isolated), each
+/// boundary crossed at a per-step pseudo-random threshold so the clamp can't
+/// be averaged away. Plain 5µs steps give the engine away.
+pub fn toMillis(elapsed_us: u64) f64 {
+    if (!lp.Persona.active) {
+        return @as(f64, @floatFromInt(elapsed_us)) / 1000.0;
+    }
+    return @as(f64, @floatFromInt(clampMicros(elapsed_us, lp.Persona.get().seed))) / 1000.0;
+}
+
+fn clampMicros(micros: u64, secret: u64) u64 {
+    const resolution: u64 = 100;
+    const lower = micros % resolution;
+    var clamped = micros - lower;
+    if (lower >= clampThreshold(clamped, secret) % resolution) {
+        clamped += resolution;
+    }
+    return clamped;
+}
+
+fn clampThreshold(time: u64, secret: u64) u64 {
+    // MurmurHash3's 64-bit finalizer, as Chrome's clamper uses.
+    var h = time ^ secret;
+    h ^= h >> 33;
+    h *%= 0xff51afd7ed558ccd;
+    h ^= h >> 33;
+    h *%= 0xc4ceb9fe1a85ec53;
+    h ^= h >> 33;
+    return h;
 }
 
 fn getTimeOrigin(self: *const Performance) f64 {
     // Return as milliseconds
+    if (lp.Persona.active) {
+        return @as(f64, @floatFromInt(self._time_origin_unix / 100 * 100)) / 1000.0;
+    }
     return @as(f64, @floatFromInt(self._time_origin_unix)) / 1000.0;
 }
 
@@ -816,8 +850,7 @@ fn relative(self: *const Performance, micros: u64) f64 {
         return 0;
     }
     const elapsed = micros -| self._time_origin;
-    const rounded = @divTrunc(elapsed + 2, 5) * 5;
-    return @as(f64, @floatFromInt(rounded)) / 1000.0;
+    return toMillis(@divTrunc(elapsed + 2, 5) * 5);
 }
 
 pub const JsApi = struct {

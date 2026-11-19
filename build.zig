@@ -117,6 +117,11 @@ pub fn build(b: *Build) !void {
     });
     lightpanda_module.addImport("lightpanda", lightpanda_module); // allow circular "lightpanda" import
     lightpanda_module.addImport("build_config", opts.createModule());
+    // SellGravity antidetect: V8's pre-2026 fdlibm Math, for older Chrome personas.
+    lightpanda_module.addCSourceFile(.{
+        .file = b.path("src/fdlibm/legacy_math.cc"),
+        .flags = &.{ "-std=c++20", "-O2", "-ffp-contract=off", "-fno-fast-math" },
+    });
 
     const fmt_step = b.step("fmt", "Check code formatting");
     const fmt = b.addFmt(.{

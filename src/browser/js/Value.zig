@@ -216,6 +216,90 @@ pub fn isProxy(self: Value) bool {
     return v8.v8__Value__IsProxy(self.handle);
 }
 
+/// True when describing this object (reading its stack, message or name, as
+/// the inspector does) could run page script: one of those keys is a scripted
+/// accessor somewhere on the prototype chain, or the chain holds a Proxy.
+/// Pages plant a `stack` getter and log the error to detect a CDP client.
+pub fn descriptionRunsScript(self: Value) bool {
+    const local = self.local;
+    const keys = [_][]const u8{ "stack", "message", "name" };
+    var key_handles: [keys.len]*const v8.String = undefined;
+    for (keys, 0..) |key, i| {
+        key_handles[i] = local.isolate.initStringHandle(key) catch return true;
+    }
+    const get_key = local.isolate.initStringHandle("get") catch return true;
+    if (prepareStackTraceSet(local)) return true;
+
+    var current: *const v8.Value = self.handle;
+    var depth: u32 = 0;
+    while (depth < 64) : (depth += 1) {
+        if (v8.v8__Value__IsNull(current)) return false;
+        if (!v8.v8__Value__IsObject(current)) return false;
+        if (v8.v8__Value__IsProxy(current)) return true;
+        const object: *const v8.Object = @ptrCast(current);
+        for (key_handles) |key_handle| {
+            const descriptor = v8.v8__Object__GetOwnPropertyDescriptor(object, local.handle, @ptrCast(key_handle)) orelse return true;
+            if (!v8.v8__Value__IsObject(descriptor)) continue;
+            var has: v8.MaybeBool = undefined;
+            v8.v8__Object__HasOwnProperty(@ptrCast(descriptor), local.handle, get_key, &has);
+            if (!has.has_value) return true;
+            if (has.value) {
+                const getter = v8.v8__Object__Get(@ptrCast(descriptor), local.handle, @ptrCast(get_key)) orelse return true;
+                if (!nativeAccessor(local, getter)) return true;
+            }
+        }
+        current = v8.v8__Object__GetPrototype(object) orelse return false;
+    }
+    return true;
+}
+
+// Formatting a stack calls a page's Error.prepareStackTrace, which pages set
+// to see whether something read their error's stack.
+fn prepareStackTraceSet(local: *const js.Local) bool {
+    const global = v8.v8__Context__Global(local.handle) orelse return true;
+    const error_ctor = ownData(local, global, "Error") orelse return false;
+    if (!v8.v8__Value__IsObject(error_ctor)) return false;
+    if (v8.v8__Value__IsProxy(error_ctor)) return true;
+    const key = local.isolate.initStringHandle("prepareStackTrace") catch return true;
+    const descriptor = v8.v8__Object__GetOwnPropertyDescriptor(@ptrCast(error_ctor), local.handle, @ptrCast(key)) orelse return true;
+    if (!v8.v8__Value__IsObject(descriptor)) return false;
+    // Set, as data or as an accessor V8 would call.
+    const prepare = ownData(local, @ptrCast(error_ctor), "prepareStackTrace") orelse return true;
+    return !v8.v8__Value__IsUndefined(prepare);
+}
+
+// An own data property's value without running a getter; null for an
+// accessor or a missing key.
+fn ownData(local: *const js.Local, object: *const v8.Object, key: []const u8) ?*const v8.Value {
+    const key_handle = local.isolate.initStringHandle(key) catch return null;
+    const descriptor = v8.v8__Object__GetOwnPropertyDescriptor(object, local.handle, @ptrCast(key_handle)) orelse return null;
+    if (!v8.v8__Value__IsObject(descriptor)) return null;
+    const value_key = local.isolate.initStringHandle("value") catch return null;
+    var has: v8.MaybeBool = undefined;
+    v8.v8__Object__HasOwnProperty(@ptrCast(descriptor), local.handle, value_key, &has);
+    if (!has.has_value or !has.value) return null;
+    return v8.v8__Object__Get(@ptrCast(descriptor), local.handle, @ptrCast(value_key));
+}
+
+// A getter the engine provides (an IDL attribute, a persona shim): calling it
+// runs no page script. A bound or proxied function only looks native.
+fn nativeAccessor(local: *const js.Local, getter: *const v8.Value) bool {
+    if (v8.v8__Value__IsUndefined(getter)) return true;
+    if (!v8.v8__Value__IsFunction(getter) or v8.v8__Value__IsProxy(getter)) return false;
+    const function: *const v8.Function = @ptrCast(getter);
+    const arena = local.call_arena;
+    const name = v8.v8__Function__GetName(function) orelse return false;
+    if (v8.v8__Value__IsString(name)) {
+        const str: js.String = .{ .local = local, .handle = @ptrCast(name) };
+        const text = str.toSliceWithAlloc(arena) catch return false;
+        if (std.mem.startsWith(u8, text, "bound ")) return false;
+    }
+    const source = v8.v8__Function__FunctionProtoToString(function, local.handle) orelse return false;
+    const src: js.String = .{ .local = local, .handle = source };
+    const text = src.toSliceWithAlloc(arena) catch return false;
+    return std.mem.endsWith(u8, text, "{ [native code] }");
+}
+
 pub fn isGeneratorObject(self: Value) bool {
     return v8.v8__Value__IsGeneratorObject(self.handle);
 }

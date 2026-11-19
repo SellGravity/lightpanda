@@ -47,6 +47,7 @@ const OfflineAudioContext = @import("OfflineAudioContext.zig");
 const AudioBufferSourceNode = @import("AudioBufferSourceNode.zig");
 const AudioDestinationNode = @import("AudioDestinationNode.zig");
 const DynamicsCompressorNode = @import("DynamicsCompressorNode.zig");
+const AnalyserNode = @import("AnalyserNode.zig");
 const AudioScheduledSourceNode = @import("AudioScheduledSourceNode.zig");
 
 const log = lp.log;
@@ -123,7 +124,7 @@ pub fn deinit(self: *BaseAudioContext, page: *Page) void {
                 }
             },
             .convolver => node.subtype(ConvolverNode).deinit(page),
-            .destination, .dynamics_compressor, .gain => {},
+            .analyser, .destination, .dynamics_compressor, .gain => {},
         }
         page.removeTarget(node.asEventTarget());
     }
@@ -314,6 +315,10 @@ fn createDynamicsCompressor(self: *BaseAudioContext) !*DynamicsCompressorNode {
     return DynamicsCompressorNode.create(self, .{});
 }
 
+fn createAnalyser(self: *BaseAudioContext) !*AnalyserNode {
+    return AnalyserNode.create(self, .{});
+}
+
 fn createGain(self: *BaseAudioContext) !*GainNode {
     return GainNode.create(self, .{});
 }
@@ -492,6 +497,7 @@ pub const JsApi = struct {
     pub const createConvolver = bridge.function(BaseAudioContext.createConvolver, .{});
     pub const decodeAudioData = bridge.function(BaseAudioContext.decodeAudioData, .{});
     pub const createDynamicsCompressor = bridge.function(BaseAudioContext.createDynamicsCompressor, .{});
+    pub const createAnalyser = bridge.function(BaseAudioContext.createAnalyser, .{});
     pub const createGain = bridge.function(BaseAudioContext.createGain, .{});
     pub const createOscillator = bridge.function(BaseAudioContext.createOscillator, .{});
     pub const createPeriodicWave = bridge.function(BaseAudioContext.createPeriodicWave, .{});

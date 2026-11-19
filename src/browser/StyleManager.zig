@@ -2896,6 +2896,13 @@ pub fn overflowAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
     return .{ .x = p.overflow_x_scrolls, .y = p.overflow_y_scrolls };
 }
 
+/// The axes along which `el` always shows a scrollbar (overflow: scroll).
+pub fn scrollbarAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
+    self.rebuildIfDirty() catch return .{};
+    const p = self.geometryProps(el);
+    return .{ .x = p.overflow_x_always, .y = p.overflow_y_always };
+}
+
 /// The axes along which `el` keeps a scroll from chaining out of it: its own
 /// computed overscroll-behavior on that axis is contain or none. No ancestor
 /// walk.
@@ -5124,6 +5131,9 @@ const Geometry = struct {
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
+        // overflow: scroll, a scrollbar whether or not the content overflows
+        overflow_x_always: ?bool = null,
+        overflow_y_always: ?bool = null,
         flex_grow: ?bool = null,
         flex_no_shrink: ?bool = null,
         overflow_y_scrolls: ?bool = null,
@@ -5145,6 +5155,7 @@ const Geometry = struct {
                 .@"overflow-x" => {
                     self.overflow_x_scrolls = overflowScrolls(value);
                     self.overflow_x_clips = overflowClips(value);
+                    self.overflow_x_always = std.ascii.eqlIgnoreCase(value, "scroll");
                 },
                 .@"flex-grow" => {
                     self.flex_grow = flexGrows(value);
@@ -5205,6 +5216,7 @@ const Geometry = struct {
                 },
                 .@"overflow-y" => {
                     self.overflow_y_scrolls = overflowScrolls(value);
+                    self.overflow_y_always = std.ascii.eqlIgnoreCase(value, "scroll");
                 },
                 .@"overscroll-behavior-x" => {
                     self.overscroll_x_contains = overscrollContains(value);
@@ -5369,9 +5381,11 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u357) {
+    const Computed = packed struct(u359) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
+        overflow_x_always: bool = false,
+        overflow_y_always: bool = false,
         flex_grow: bool = false,
         flex_no_shrink: bool = false,
         overflow_y_scrolls: bool = false,
@@ -5401,7 +5415,7 @@ const Geometry = struct {
         // each length's unit, then the bools: apart so neither needs a u64,
         // which would pad the record
         units: u32,
-        flags: u8,
+        flags: u16,
 
         const names = @typeInfo(Computed).@"struct".field_names;
         const types = @typeInfo(Computed).@"struct".field_types;
@@ -5409,7 +5423,7 @@ const Geometry = struct {
 
         comptime {
             std.debug.assert(length_count * @bitSizeOf(Length.Unit) <= 32);
-            std.debug.assert(names.len - length_count <= 8);
+            std.debug.assert(names.len - length_count <= 16);
         }
 
         fn pack(computed: Computed) Stored {
@@ -5423,7 +5437,7 @@ const Geometry = struct {
                     stored.units |= @as(u32, @backingInt(value.unit)) << (length * @bitSizeOf(Length.Unit));
                     length += 1;
                 } else {
-                    stored.flags |= @as(u8, @intFromBool(value)) << flag;
+                    stored.flags |= @as(u16, @intFromBool(value)) << flag;
                     flag += 1;
                 }
             }
@@ -7036,12 +7050,12 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_x_always = false, .overflow_y_always = false, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_x_always = false, .overflow_y_always = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_x_always = false, .overflow_y_always = false, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_x_always = false, .overflow_y_always = false, .overflow_y_scrolls = false } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_x_always = false, .overflow_y_always = false, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_x_always = false } },
         .{},
         .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
         .{ .geometry = .{ .height = .{} } },

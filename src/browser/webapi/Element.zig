@@ -1737,7 +1737,31 @@ fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
+    const bar = lp.Persona.scrollbarWidth();
+    if (self.viewportAxis(frame, axis)) |viewport| {
+        // The root scroller loses the scrollbar's width when the document
+        // overflows the other way, as every long page does.
+        if (bar == 0) return viewport;
+        const doc = self.asNode().ownerDocument(frame) orelse return viewport;
+        const size = doc.scrollSize();
+        const page_viewport = frame.page.getViewport();
+        const overflows = switch (axis) {
+            .width => size.height > @as(f64, @floatFromInt(page_viewport.height)),
+            .height => size.width > @as(f64, @floatFromInt(page_viewport.width)),
+        };
+        return if (overflows) @max(0, viewport - bar) else viewport;
+    }
+    const box = self.boxAxis(frame, axis);
+    if (bar == 0) return box;
+    // overflow: scroll shows a scrollbar inside the border box: a vertical
+    // one narrows clientWidth, a horizontal one shortens clientHeight.
+    const owner = self.ownerFrame(frame) orelse return box;
+    const axes = owner._style_manager.scrollbarAxes(self);
+    const has = switch (axis) {
+        .width => axes.y,
+        .height => axes.x,
+    };
+    return if (has) @max(0, box - bar) else box;
 }
 
 /// Document.scrollSize, when self is the root scroller (see viewportAxis).

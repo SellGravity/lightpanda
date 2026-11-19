@@ -5233,7 +5233,27 @@ const Synthetic = struct {
     const data_url = @import("../browser/data_url.zig");
 
     fn isSynthetic(url: []const u8) bool {
-        return std.mem.startsWith(u8, url, "data:") or std.mem.startsWith(u8, url, "blob:");
+        return std.mem.startsWith(u8, url, "data:") or std.mem.startsWith(u8, url, "blob:") or
+            (lp.Persona.active and std.mem.startsWith(u8, url, "chrome-extension://"));
+    }
+
+    // Google Docs Offline ships with branded desktop Chrome and exposes this
+    // script to every page; detectors load it to tell a real Chrome from an
+    // automation build. Its exact bytes. Any other extension resource is a
+    // network error, as for an extension that isn't installed.
+    const docs_offline_url = "chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js";
+    const docs_offline_script =
+        \\(function(){window._docs_chrome_extension_exists=!0;window._docs_chrome_extension_features_version=2;window._docs_chrome_extension_permissions="alarms clipboardRead clipboardWrite storage unlimitedStorage offscreen".split(" ");window._docs_chrome_extension_manifest_version=3;window._docs_chrome_extension_version="1.111.1";}).call(this);
+        \\
+    ;
+
+    fn hasDocsOffline() bool {
+        const p = lp.Persona.get();
+        if (p.mobile or p.chrome_major == 0) return false;
+        return switch (p.os) {
+            .windows, .macos, .linux, .chromeos => true,
+            else => false,
+        };
     }
 
     // Materialize the synthetic response onto the transfer and buffer it for
@@ -5249,6 +5269,13 @@ const Synthetic = struct {
             const parsed = try data_url.parse(arena.allocator(), url);
             content_type = parsed.content_type;
             body = try .dupe(transfer.client.allocator, parsed.body);
+        } else if (std.mem.startsWith(u8, url, "chrome-extension://")) {
+            const key = url[0 .. std.mem.findAny(u8, url, "?#") orelse url.len];
+            if (transfer.req.method != .GET or !std.mem.eql(u8, key, docs_offline_url) or !hasDocsOffline()) {
+                return error.ExtensionResourceNotFound;
+            }
+            content_type = "text/javascript";
+            body = try .dupe(transfer.client.allocator, docs_offline_script);
         } else {
             // Fetch: a blob: request with any other method is a network error.
             if (transfer.req.method != .GET) {

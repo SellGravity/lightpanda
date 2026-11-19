@@ -259,17 +259,20 @@
     }
   }
 
-  if (typeof window === 'undefined') return;
-
-  // getContext('webgl2') hands out the same native context class with WebGL2
-  // answers; expose the constructor so `instanceof` checks hold.
-  if (typeof WebGL2RenderingContext === 'undefined' && typeof WebGLRenderingContext !== 'undefined') {
-    const ctor = makeNative('WebGL2RenderingContext', 0, function () { throw new TypeError('Illegal constructor'); });
-    Object.defineProperty(ctor, 'prototype', { value: WebGLRenderingContext.prototype, writable: false, configurable: false, enumerable: false });
-    Object.defineProperty(window, 'WebGL2RenderingContext', { value: ctor, writable: true, configurable: true, enumerable: false });
+  const parityTable = persona && persona.parity;
+  if (typeof window === 'undefined') {
+    if (major > 0) {
+      webgl2Split();
+      deepApis(major, parityTable, parity(major, parityTable));
+    }
+    insecureContext();
+    return;
   }
 
+  webgl2Split();
   chromeSurface(makeNative, major);
+  if (major > 0) deepApis(major, parityTable, parity(major, parityTable));
+  insecureContext();
 
   if ('chrome' in window) return;
   const t0 = Date.now() / 1000;
@@ -601,5 +604,540 @@
       });
     }
     return made;
+  }
+
+  // ---------------------------------------------------------------------
+  // Secure-context-only surface. Chrome exposes these only to https (and
+  // loopback) documents; on http they are simply absent.
+  // ---------------------------------------------------------------------
+  function insecureContext() {
+    const G = self;
+    if (G.isSecureContext !== false) return;
+    const N = typeof Navigator !== 'undefined' ? Navigator.prototype : (typeof WorkerNavigator !== 'undefined' ? WorkerNavigator.prototype : null);
+    if (N) {
+      for (const k of ['cpuPerformance', 'bluetooth', 'clipboard', 'credentials', 'keyboard', 'managed', 'mediaDevices', 'serviceWorker',
+        'virtualKeyboard', 'wakeLock', 'deviceMemory', 'userAgentData', 'locks', 'storage', 'gpu', 'login', 'devicePosture', 'hid',
+        'presentation', 'serial', 'usb', 'xr', 'storageBuckets', 'canShare', 'share', 'clearAppBadge', 'getBattery', 'getUserMedia',
+        'requestMIDIAccess', 'requestMediaKeySystemAccess', 'setAppBadge', 'webkitGetUserMedia', 'getInstalledRelatedApps',
+        'registerProtocolHandler', 'unregisterProtocolHandler']) { try { delete N[k]; } catch (e) { /* keep */ } }
+    }
+    if (typeof Document !== 'undefined') {
+      for (const k of ['onpointerrawupdate', 'browsingTopics', 'hasPrivateToken', 'hasRedemptionRecord']) { try { delete Document.prototype[k]; } catch (e) { /* keep */ } }
+    }
+    if (G.crypto && typeof Crypto !== 'undefined') {
+      try { Object.defineProperty(Crypto.prototype, 'subtle', { get: makeNative('get subtle', 0, function () { return undefined; }), enumerable: true, configurable: true }); } catch (e) { /* keep */ }
+    }
+    const names = ('cookieStore ondevicemotion ondeviceorientation ondeviceorientationabsolute onpointerrawupdate caches documentPictureInPicture ' +
+      'AbsoluteOrientationSensor Accelerometer AudioDecoder AudioEncoder AudioWorklet BatteryManager Cache CacheStorage ClipboardChangeEvent ' +
+      'CookieChangeEvent CookieStore CookieStoreManager CreateMonitor Credential CredentialsContainer CryptoKey DeviceMotionEvent ' +
+      'DeviceMotionEventAcceleration DeviceMotionEventRotationRate DeviceOrientationEvent FederatedCredential GPU GPUAdapter GPUAdapterInfo ' +
+      'GPUBindGroup GPUBindGroupLayout GPUBuffer GPUBufferUsage GPUCanvasContext GPUColorWrite GPUCommandBuffer GPUCommandEncoder ' +
+      'GPUCompilationInfo GPUCompilationMessage GPUComputePassEncoder GPUComputePipeline GPUDevice GPUDeviceLostInfo GPUError ' +
+      'GPUExternalTexture GPUInternalError GPUMapMode GPUOutOfMemoryError GPUPipelineError GPUPipelineLayout GPUQuerySet GPUQueue ' +
+      'GPURenderBundle GPURenderBundleEncoder GPURenderPassEncoder GPURenderPipeline GPUSampler GPUShaderModule GPUShaderStage ' +
+      'GPUSupportedFeatures GPUSupportedLimits GPUTexture GPUTextureUsage GPUTextureView GPUUncapturedErrorEvent GPUValidationError ' +
+      'GravitySensor Gyroscope IdleDetector ImageCapture ImageDecoder ImageTrack ImageTrackList Keyboard KeyboardLayoutMap ' +
+      'LinearAccelerationSensor Lock LockManager MIDIAccess MIDIConnectionEvent MIDIInput MIDIInputMap MIDIMessageEvent MIDIOutput ' +
+      'MIDIOutputMap MIDIPort MediaDeviceInfo MediaDevices MediaKeyMessageEvent MediaKeySession MediaKeyStatusMap MediaKeySystemAccess ' +
+      'MediaKeys NavigationPreloadManager NavigatorManagedData OrientationSensor PasswordCredential ProtectedAudience ' +
+      'RelativeOrientationSensor ScreenDetailed ScreenDetails Sensor SensorErrorEvent ServiceWorkerRegistration StorageManager ' +
+      'SubtleCrypto VideoDecoder VideoEncoder VirtualKeyboard WGSLLanguageFeatures WebTransport WebTransportBidirectionalStream ' +
+      'WebTransportDatagramDuplexStream WebTransportError Worklet XRDOMOverlayState XRLayer XRWebGLBinding AudioPlaybackStats ' +
+      'AuthenticatorAssertionResponse AuthenticatorAttestationResponse AuthenticatorResponse PublicKeyCredential Bluetooth ' +
+      'BluetoothCharacteristicProperties BluetoothDevice BluetoothRemoteGATTCharacteristic BluetoothRemoteGATTDescriptor ' +
+      'BluetoothRemoteGATTServer BluetoothRemoteGATTService CaptureController Clipboard ClipboardItem ServiceWorker ' +
+      'ServiceWorkerContainer DevicePosture DigitalCredential DocumentPictureInPicture EyeDropper FetchLaterResult ' +
+      'FileSystemDirectoryHandle FileSystemFileHandle FileSystemHandle FileSystemWritableFileStream FileSystemObserver FontData HID ' +
+      'HIDConnectionEvent HIDDevice HIDInputReportEvent IdentityCredential IdentityCredentialError IdentityProvider NavigatorLogin ' +
+      'LanguageDetector LanguageModel OTPCredential PaymentAddress PaymentRequest PaymentRequestUpdateEvent PaymentResponse ' +
+      'PaymentManager PaymentMethodChangeEvent Presentation PresentationAvailability PresentationConnection ' +
+      'PresentationConnectionAvailableEvent PresentationConnectionCloseEvent PresentationConnectionList PresentationReceiver ' +
+      'PresentationRequest PressureObserver PressureRecord Serial SerialPort SpeechRecognitionPhrase StorageBucket ' +
+      'StorageBucketManager Summarizer Translator USB USBAlternateInterface USBConfiguration USBConnectionEvent USBDevice USBEndpoint ' +
+      'USBInTransferResult USBInterface USBIsochronousInTransferPacket USBIsochronousInTransferResult USBIsochronousOutTransferPacket ' +
+      'USBIsochronousOutTransferResult USBOutTransferResult WakeLock WakeLockSentinel XRAnchor XRAnchorSet XRBoundedReferenceSpace ' +
+      'XRCPUDepthInformation XRCamera XRDepthInformation XRFrame XRHand XRHitTestResult XRHitTestSource XRInputSource ' +
+      'XRInputSourceArray XRInputSourceEvent XRInputSourcesChangeEvent XRJointPose XRJointSpace XRLightEstimate XRLightProbe XRPose ' +
+      'XRRay XRReferenceSpace XRReferenceSpaceEvent XRRenderState XRRigidTransform XRSession XRSessionEvent XRSpace XRSystem ' +
+      'XRTransientInputHitTestResult XRTransientInputHitTestSource XRView XRViewerPose XRViewport XRWebGLDepthInformation ' +
+      'XRWebGLLayer XRCompositionLayer XRProjectionLayer XRCubeLayer XRCylinderLayer XREquirectLayer XRLayerEvent XRQuadLayer ' +
+      'XRSubImage XRWebGLSubImage XRPlane XRPlaneSet XRVisibilityMaskChangeEvent fetchLater getScreenDetails queryLocalFonts ' +
+      'showDirectoryPicker showOpenFilePicker showSaveFilePicker').split(' ');
+    for (const k of names) {
+      if (Object.prototype.hasOwnProperty.call(G, k)) { try { delete G[k]; } catch (e) { /* keep */ } }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // WebGL2RenderingContext is its own interface in Chrome: its prototype
+  // does not inherit from WebGLRenderingContext's, and a WebGL 1 context has
+  // none of the WebGL 2 members. Lightpanda serves both from one native
+  // class; give webgl2 contexts a separate prototype carrying the same
+  // natives.
+  // ---------------------------------------------------------------------
+  function webgl2Split() {
+    const G = self;
+    const GL1 = G.WebGLRenderingContext;
+    if (typeof GL1 !== 'function') return null;
+    const existing = G.WebGL2RenderingContext;
+    if (existing && existing.prototype && existing.prototype !== GL1.prototype) return existing;
+    const ctor = makeNative('WebGL2RenderingContext', 0, function () {}, true);
+    const proto = ctor.prototype;
+    for (const k of Reflect.ownKeys(GL1.prototype)) {
+      if (k === 'constructor') continue;
+      Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(GL1.prototype, k));
+    }
+    Object.defineProperty(proto, Symbol.toStringTag, { value: 'WebGL2RenderingContext', writable: false, enumerable: false, configurable: true });
+    Object.defineProperty(ctor, 'prototype', { writable: false, enumerable: false });
+    Object.defineProperty(G, 'WebGL2RenderingContext', { value: ctor, writable: true, enumerable: false, configurable: true });
+    for (const C of [G.HTMLCanvasElement, G.OffscreenCanvas]) {
+      if (typeof C !== 'function' || !C.prototype.getContext) continue;
+      const orig = C.prototype.getContext;
+      Object.defineProperty(C.prototype, 'getContext', {
+        value: makeNative('getContext', 1, function (type) {
+          const ctx = orig.apply(this, arguments);
+          if (ctx && String(type) === 'webgl2' && Object.getPrototypeOf(ctx) === GL1.prototype) Object.setPrototypeOf(ctx, proto);
+          return ctx;
+        }),
+        writable: true, enumerable: true, configurable: true,
+      });
+    }
+    return ctor;
+  }
+
+  // ---------------------------------------------------------------------
+  // Prototype parity: every member Chrome has on an interface Lightpanda
+  // exposes, gated by the release that shipped it. Table format (one entry
+  // per interface, ";" separated): "Iface>name:kind@since,..." and
+  // "Iface.s>" for static members.
+  //   m<n> method (n = WebIDL length)  g/gs/s accessor  c<v> constant
+  //   L<n> correct a method's length   A/AS data property -> accessor
+  //   S    add the setter Chrome has
+  // Calls on the prototype itself throw "Illegal invocation" like Blink's
+  // bindings; attributes a script sets read back per instance. The returned
+  // `slots` map lets real implementations below answer those getters.
+  // ---------------------------------------------------------------------
+  function parity(major, table) {
+    const slots = new WeakMap();
+    if (!table || !major) return slots;
+    const G = self;
+    const hop = Object.prototype.hasOwnProperty;
+    const branded = (C, o) => o !== null && (typeof o === 'object' || typeof o === 'function') && o instanceof C && !hop.call(o, 'constructor');
+    const illegal = () => { throw new TypeError('Illegal invocation'); };
+    const inherited = (T, k) => { for (let p = Object.getPrototypeOf(T); p; p = Object.getPrototypeOf(p)) { const d = Object.getOwnPropertyDescriptor(p, k); if (d) return d; } return null; };
+    const slot = (o) => { let s = slots.get(o); if (!s) { s = {}; slots.set(o, s); } return s; };
+    const argc = (iname, k, len, n) => {
+      if (n < len) throw new TypeError("Failed to execute '" + k + "' on '" + iname + "': " + len + ' argument' + (len > 1 ? 's' : '') + ' required, but only ' + n + ' present.');
+    };
+    const main = table.split('\n#EXT\n')[0];
+    for (const seg of main.split(';')) {
+      const gt = seg.indexOf('>');
+      if (gt < 0) continue;
+      let iname = seg.slice(0, gt);
+      const stat = iname.endsWith('.s');
+      if (stat) iname = iname.slice(0, -2);
+      const C = G[iname];
+      if (typeof C !== 'function') continue;
+      const T = stat ? C : C.prototype;
+      if (!T || typeof T !== 'object' && typeof T !== 'function') continue;
+      for (const it of seg.slice(gt + 1).split(',')) {
+        const at = it.lastIndexOf('@');
+        if (at >= 0 && +it.slice(at + 1) > major) continue;
+        const body = at < 0 ? it : it.slice(0, at);
+        const c = body.lastIndexOf(':');
+        const k = body.slice(0, c), code = body.slice(c + 1), kind = code[0];
+        try {
+          const own = Object.getOwnPropertyDescriptor(T, k);
+          if (kind === 'c') {
+            if (!own) Object.defineProperty(T, k, { value: +code.slice(1), writable: false, enumerable: true, configurable: false });
+          } else if (kind === 'm') {
+            if (own) continue;
+            const len = +code.slice(1);
+            const up = inherited(T, k);
+            let impl;
+            if (up && typeof up.value === 'function') {
+              const f = up.value;
+              impl = function () { return f.apply(this, arguments); };
+            } else if (stat) {
+              impl = function () { argc(iname, k, len, arguments.length); return undefined; };
+            } else {
+              impl = function () { if (!branded(C, this)) illegal(); argc(iname, k, len, arguments.length); return undefined; };
+            }
+            Object.defineProperty(T, k, { value: makeNative(k, len, impl), writable: true, enumerable: true, configurable: true });
+          } else if (kind === 'g' || kind === 's') {
+            if (own) continue;
+            const up = inherited(T, k);
+            const hasSet = code === 'gs' || code === 's';
+            let get, set;
+            if (up && (up.get || up.set)) {
+              const ug = up.get, us = up.set;
+              get = function () { return ug ? ug.call(this) : undefined; };
+              set = function (v) { if (us) us.call(this, v); };
+            } else {
+              const handler = k.startsWith('on');
+              get = function () {
+                if (!stat && !branded(C, this)) illegal();
+                const s = slots.get(this);
+                return s && hop.call(s, k) ? s[k] : null;
+              };
+              set = function (v) {
+                if (!stat && !branded(C, this)) illegal();
+                slot(this)[k] = handler ? (typeof v === 'function' || (v && typeof v === 'object') ? v : null) : v;
+              };
+            }
+            const d = { get: makeNative('get ' + k, 0, get), enumerable: true, configurable: true };
+            if (hasSet) d.set = makeNative('set ' + k, 1, set);
+            Object.defineProperty(T, k, d);
+          } else if (kind === 'L') {
+            if (own && typeof own.value === 'function') Object.defineProperty(own.value, 'length', { value: +code.slice(1), configurable: true });
+          } else if (kind === 'A') {
+            if (!own || !('value' in own)) continue;
+            const val = own.value;
+            const d = {
+              get: makeNative('get ' + k, 0, function () {
+                if (!stat && !branded(C, this)) illegal();
+                const s = slots.get(this);
+                return s && hop.call(s, k) ? s[k] : val;
+              }),
+              enumerable: own.enumerable, configurable: true,
+            };
+            if (code === 'AS') d.set = makeNative('set ' + k, 1, function (v) { if (!stat && !branded(C, this)) illegal(); slot(this)[k] = v; });
+            Object.defineProperty(T, k, d);
+          } else if (kind === 'S') {
+            if (!own || !own.get || own.set) continue;
+            let set = function () {};
+            if (k === 'style') set = function (v) { const st = this.style; if (st) st.cssText = String(v); };
+            else if (k === 'selectionDirection') set = function (v) { try { this.setSelectionRange(this.selectionStart, this.selectionEnd, String(v)); } catch (e) { /* not a text control */ } };
+            Object.defineProperty(T, k, { get: own.get, set: makeNative('set ' + k, 1, set), enumerable: own.enumerable, configurable: true });
+          }
+        } catch (e) { /* leave this member as it is */ }
+      }
+    }
+    return slots;
+  }
+
+  // ---------------------------------------------------------------------
+  // Real behaviour for the APIs fingerprinting and bot-detection scripts
+  // call (Lightpanda only had empty interface objects for them).
+  // ---------------------------------------------------------------------
+  function deepApis(major, table, slots) {
+    const G = self;
+    const hop = Object.prototype.hasOwnProperty;
+    const inst = (C, values) => { const o = Object.create(C.prototype); if (values) slots.set(o, values); return o; };
+    const method = (T, k, len, impl) => Object.defineProperty(T, k, { value: makeNative(k, len, impl), writable: true, enumerable: true, configurable: true });
+    const getter = (T, k, impl) => Object.defineProperty(T, k, { get: makeNative('get ' + k, 0, impl), enumerable: true, configurable: true });
+    const argc = (iface, k, len, n) => { if (n < len) throw new TypeError("Failed to execute '" + k + "' on '" + iface + "': " + len + ' argument' + (len > 1 ? 's' : '') + ' required, but only ' + n + ' present.'); };
+    const reject = (err) => Promise.reject(err);
+    const mobile = !!(G.navigator && navigator.userAgentData && navigator.userAgentData.mobile);
+
+    // setlike / maplike backing: Blink's read-only collections.
+    const collection = (C, kind) => {
+      if (typeof C !== 'function') return;
+      const P = C.prototype;
+      const data = (o) => { const s = slots.get(o); if (!s || !s.__data) throw new TypeError('Illegal invocation'); return s.__data; };
+      getter(P, 'size', function () { return data(this).size; });
+      method(P, 'has', 1, function (k) { return data(this).has(k); });
+      method(P, 'forEach', 1, function (cb, thisArg) { const m = data(this); m.forEach((v, k) => cb.call(thisArg, v, k, this)); });
+      method(P, 'entries', 0, function () { return data(this).entries(); });
+      method(P, 'keys', 0, function () { return data(this).keys(); });
+      method(P, 'values', 0, function () { return data(this).values(); });
+      if (kind === 'map') method(P, 'get', 1, function (k) { return data(this).get(k); });
+      const iter = kind === 'map' ? P.entries : P.values;
+      Object.defineProperty(P, Symbol.iterator, { value: iter, writable: true, enumerable: false, configurable: true });
+    };
+
+    // --- WebGL: extension objects and WebGL 2 parameters ------------------
+    const GL1 = G.WebGLRenderingContext, GL2 = G.WebGL2RenderingContext;
+    if (typeof GL1 === 'function') {
+      const extDefs = new Map();
+      const extPart = (table || '').split('\n#EXT\n')[1] || '';
+      for (const e of extPart.split(';')) { const i = e.indexOf('|'); if (i > 0) extDefs.set(e.slice(0, i), e.slice(i + 1)); }
+      const extProtos = new Map();
+      const extProto = (name) => {
+        let p = extProtos.get(name);
+        if (p) return p;
+        const ctor = makeNative(name, 0, function () {}, true);
+        p = ctor.prototype;
+        for (const part of (extDefs.get(name) || '').split(' ').filter(Boolean)) {
+          const eq = part.indexOf('='), paren = part.indexOf('(');
+          if (eq > 0) Object.defineProperty(p, part.slice(0, eq), { value: +part.slice(eq + 1), writable: false, enumerable: true, configurable: false });
+          else if (paren > 0) {
+            const m = part.slice(0, paren), len = +part.slice(paren + 1);
+            method(p, m, len, function () {
+              if (!(this instanceof ctor)) throw new TypeError('Illegal invocation');
+              argc(name, m, len, arguments.length);
+              if (m.startsWith('is')) return false;
+              if (m.startsWith('create') || m.startsWith('get')) return null;
+              return undefined;
+            });
+          }
+        }
+        Object.defineProperty(p, Symbol.toStringTag, { value: name, writable: false, enumerable: false, configurable: true });
+        extProtos.set(name, p);
+        return p;
+      };
+      const enabled = new WeakMap();
+      const gl2Params = {
+        MAX_3D_TEXTURE_SIZE: 2048, MAX_ELEMENTS_VERTICES: 2147483647, MAX_ELEMENTS_INDICES: 2147483647, MAX_TEXTURE_LOD_BIAS: 2,
+        MAX_DRAW_BUFFERS: 8, MAX_FRAGMENT_UNIFORM_COMPONENTS: 4096, MAX_VERTEX_UNIFORM_COMPONENTS: 16384, MAX_ARRAY_TEXTURE_LAYERS: 2048,
+        MIN_PROGRAM_TEXEL_OFFSET: -8, MAX_PROGRAM_TEXEL_OFFSET: 7, MAX_VARYING_COMPONENTS: 120,
+        MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS: 4, MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS: 120,
+        MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS: 4, MAX_COLOR_ATTACHMENTS: 8, MAX_SAMPLES: 8, MAX_VERTEX_UNIFORM_BLOCKS: 12,
+        MAX_FRAGMENT_UNIFORM_BLOCKS: 12, MAX_COMBINED_UNIFORM_BLOCKS: 24, MAX_UNIFORM_BUFFER_BINDINGS: 24, MAX_UNIFORM_BLOCK_SIZE: 65536,
+        MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS: 212992, MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS: 200704,
+        UNIFORM_BUFFER_OFFSET_ALIGNMENT: 256, MAX_VERTEX_OUTPUT_COMPONENTS: 120, MAX_FRAGMENT_INPUT_COMPONENTS: 120,
+        MAX_SERVER_WAIT_TIMEOUT: 0, MAX_ELEMENT_INDEX: 4294967294, MAX_CLIENT_WAIT_TIMEOUT_WEBGL: 0,
+      };
+      let gl2ByEnum = null;
+      for (const C of [GL1, GL2]) {
+        if (typeof C !== 'function') continue;
+        const P = C.prototype;
+        const nativeGet = P.getExtension, nativeParam = P.getParameter, supported = P.getSupportedExtensions;
+        if (typeof nativeGet !== 'function' || typeof nativeParam !== 'function') continue;
+        method(P, 'getExtension', 1, function (name) {
+          argc(C === GL2 ? 'WebGL2RenderingContext' : 'WebGLRenderingContext', 'getExtension', 1, arguments.length);
+          const r = nativeGet.call(this, name);
+          const want = String(name).toLowerCase();
+          const list = supported.call(this) || [];
+          const canonical = list.find((n) => n.toLowerCase() === want);
+          if (!canonical) return r || null;
+          let m = enabled.get(this);
+          if (!m) { m = new Map(); enabled.set(this, m); }
+          if (r) { m.set(canonical, r); return r; }
+          if (!m.has(canonical)) m.set(canonical, Object.create(extProto(canonical)));
+          return m.get(canonical);
+        });
+        method(P, 'getParameter', 1, function (pname) {
+          const v = nativeParam.apply(this, arguments);
+          if (v !== null && v !== undefined) return v;
+          const n = +pname;
+          if (n === 0x84FF) { const m = enabled.get(this); return m && m.has('EXT_texture_filter_anisotropic') ? 16 : null; }
+          if (GL2 && this instanceof GL2) {
+            if (!gl2ByEnum) {
+              gl2ByEnum = new Map();
+              for (const [k, val] of Object.entries(gl2Params)) { const e = GL2.prototype[k]; if (typeof e === 'number') gl2ByEnum.set(e, val); }
+            }
+            if (gl2ByEnum.has(n)) return gl2ByEnum.get(n);
+          }
+          return v;
+        });
+      }
+    }
+
+    // --- WebGPU -----------------------------------------------------------
+    if (typeof G.GPU === 'function' && typeof G.GPUAdapter === 'function') {
+      const vendorInfo = () => {
+        let r = '';
+        try {
+          const c = (typeof OffscreenCanvas === 'function') ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
+          const g = c.getContext('webgl');
+          if (g) r = String(g.getParameter(0x9246) || '');
+        } catch (e) { /* no context */ }
+        const s = r.toLowerCase();
+        if (s.includes('nvidia')) {
+          const arch = /rtx\s*50/.test(s) ? 'blackwell' : /rtx\s*40|rtx\s*\d+\s*ada/.test(s) ? 'lovelace' : /rtx\s*30|rtx a\d/.test(s) ? 'ampere'
+            : /rtx\s*20|gtx\s*16|titan rtx/.test(s) ? 'turing' : /gtx\s*10|titan x/.test(s) ? 'pascal' : /gtx\s*9/.test(s) ? 'maxwell' : '';
+          return { vendor: 'nvidia', architecture: arch, min: 32, max: 32 };
+        }
+        if (s.includes('amd') || s.includes('radeon')) {
+          const arch = /rx\s*9\d{3}/.test(s) ? 'rdna-4' : /rx\s*7\d{3}|780m|760m/.test(s) ? 'rdna-3' : /rx\s*6\d{3}|680m|660m/.test(s) ? 'rdna-2'
+            : /rx\s*5\d{3}/.test(s) ? 'rdna-1' : /vega/.test(s) ? 'gcn-5' : /rx\s*[45]\d0/.test(s) ? 'gcn-4' : '';
+          return { vendor: 'amd', architecture: arch, min: arch.startsWith('rdna') ? 32 : 64, max: 64 };
+        }
+        if (s.includes('intel')) {
+          const arch = /arc/.test(s) ? 'xe-hpg' : /iris\(r\) xe|iris xe|uhd graphics 7\d\d|uhd graphics 77\d|graphics 7\d\d/.test(s) ? 'gen-12lp'
+            : /uhd graphics 6\d\d|hd graphics 6\d\d|iris plus|uhd graphics 6/.test(s) ? 'gen-9' : /hd graphics 5\d\d/.test(s) ? 'gen-9' : 'gen-12lp';
+          return { vendor: 'intel', architecture: arch, min: 8, max: 32 };
+        }
+        if (s.includes('apple')) return { vendor: 'apple', architecture: 'metal-3', min: 4, max: 64 };
+        if (s.includes('qualcomm') || s.includes('adreno')) return { vendor: 'qualcomm', architecture: '', min: 64, max: 128 };
+        if (s.includes('arm') || s.includes('mali')) return { vendor: 'arm', architecture: '', min: 4, max: 64 };
+        return { vendor: '', architecture: '', min: 4, max: 128 };
+      };
+      const featureList = [['depth-clip-control', 0], ['depth32float-stencil8', 0], ['texture-compression-bc', 0], ['texture-compression-bc-sliced-3d', 131],
+        ['timestamp-query', 0], ['indirect-first-instance', 0], ['shader-f16', 0], ['rg11b10ufloat-renderable', 0], ['bgra8unorm-storage', 0],
+        ['float32-filterable', 0], ['float32-blendable', 132], ['clip-distances', 131], ['dual-source-blending', 130], ['subgroups', 134],
+        ['core-features-and-limits', 135], ['texture-formats-tier1', 138], ['texture-formats-tier2', 139], ['primitive-index', 145],
+        ['texture-component-swizzle', 147], ['subgroup-size-control', 148], ['texture-compression-unaligned', 148]];
+      const wgslList = [['readonly_and_readwrite_storage_textures', 0], ['packed_4x8_integer_dot_product', 0], ['unrestricted_pointer_parameters', 0],
+        ['pointer_composite_access', 0], ['uniform_buffer_standard_layout', 143], ['subgroup_id', 144], ['subgroup_uniformity', 144],
+        ['texture_and_sampler_let', 144], ['texture_formats_tier1', 145], ['linear_indexing', 146], ['swizzle_assignment', 147],
+        ['buffer_view', 148], ['immediate_address_space', 148]];
+      const limitList = [['maxTextureDimension1D', 16384], ['maxTextureDimension2D', 16384], ['maxTextureDimension3D', 2048], ['maxTextureArrayLayers', 2048],
+        ['maxBindGroups', 4], ['maxBindGroupsPlusVertexBuffers', 24], ['maxBindingsPerBindGroup', 1000], ['maxDynamicUniformBuffersPerPipelineLayout', 10],
+        ['maxDynamicStorageBuffersPerPipelineLayout', 8], ['maxSampledTexturesPerShaderStage', 48], ['maxSamplersPerShaderStage', 16],
+        ['maxStorageBuffersPerShaderStage', 16], ['maxStorageTexturesPerShaderStage', 8], ['maxUniformBuffersPerShaderStage', 12],
+        ['maxUniformBufferBindingSize', 65536], ['maxStorageBufferBindingSize', 2147483644], ['minUniformBufferOffsetAlignment', 256],
+        ['minStorageBufferOffsetAlignment', 256], ['maxVertexBuffers', 8], ['maxBufferSize', 2147483648], ['maxVertexAttributes', 30],
+        ['maxVertexBufferArrayStride', 2048], ['maxInterStageShaderVariables', 28], ['maxColorAttachments', 8],
+        ['maxColorAttachmentBytesPerSample', 128], ['maxComputeWorkgroupStorageSize', 32768], ['maxComputeInvocationsPerWorkgroup', 1024],
+        ['maxComputeWorkgroupSizeX', 1024], ['maxComputeWorkgroupSizeY', 1024], ['maxComputeWorkgroupSizeZ', 64],
+        ['maxComputeWorkgroupsPerDimension', 65535], ['maxImmediateSize', 64], ['maxStorageBuffersInFragmentStage', 16],
+        ['maxStorageTexturesInFragmentStage', 8], ['maxStorageBuffersInVertexStage', 16], ['maxStorageTexturesInVertexStage', 8]];
+      collection(G.GPUSupportedFeatures, 'set');
+      collection(G.WGSLLanguageFeatures, 'set');
+      const features = () => inst(G.GPUSupportedFeatures, { __data: new Set(featureList.filter(([, v]) => v <= major).map(([k]) => k)) });
+      const limits = () => {
+        const L = G.GPUSupportedLimits;
+        const values = {};
+        for (const [k, v] of limitList) if (L && k in L.prototype) values[k] = v;
+        return inst(L, values);
+      };
+      let wgsl = null;
+      let adapterInfo = null;
+      const info = () => {
+        if (adapterInfo) return adapterInfo;
+        const v = vendorInfo();
+        adapterInfo = inst(G.GPUAdapterInfo, { vendor: v.vendor, architecture: v.architecture, device: '', description: '',
+          subgroupMinSize: v.min, subgroupMaxSize: v.max, isFallbackAdapter: false });
+        return adapterInfo;
+      };
+      const GP = G.GPU.prototype;
+      method(GP, 'requestAdapter', 0, function () {
+        const adapter = inst(G.GPUAdapter, { features: features(), limits: limits(), info: info(), isFallbackAdapter: false });
+        return Promise.resolve(adapter);
+      });
+      method(GP, 'getPreferredCanvasFormat', 0, function () { return mobile ? 'rgba8unorm' : 'bgra8unorm'; });
+      getter(GP, 'wgslLanguageFeatures', function () {
+        if (!wgsl) wgsl = inst(G.WGSLLanguageFeatures, { __data: new Set(wgslList.filter(([, v]) => v <= major).map(([k]) => k)) });
+        return wgsl;
+      });
+      const AP = G.GPUAdapter.prototype;
+      method(AP, 'requestDevice', 0, function () {
+        const s = slots.get(this);
+        if (!s) return reject(new TypeError('Illegal invocation'));
+        if (s.consumed) return reject(new DOMException('The adapter is consumed.', 'OperationError'));
+        s.consumed = true;
+        const device = inst(G.GPUDevice, {
+          features: s.features, limits: s.limits, adapterInfo: s.info, label: '', onuncapturederror: null,
+          queue: typeof G.GPUQueue === 'function' ? inst(G.GPUQueue, { label: '' }) : null,
+          lost: new Promise(() => {}),
+        });
+        return Promise.resolve(device);
+      });
+    }
+
+    // --- Encrypted Media Extensions --------------------------------------
+    const NP = typeof Navigator !== 'undefined' ? Navigator.prototype : null;
+    const canPlay = (type) => {
+      if (!type) return true;
+      try {
+        const el = typeof document !== 'undefined' ? document.createElement(String(type).startsWith('audio') ? 'audio' : 'video') : null;
+        return !el || el.canPlayType(String(type)) !== '';
+      } catch (e) { return false; }
+    };
+    if (NP && hop.call(NP, 'requestMediaKeySystemAccess') && typeof G.MediaKeySystemAccess === 'function') {
+      const KP = G.MediaKeySystemAccess.prototype;
+      method(KP, 'getConfiguration', 0, function () { const s = slots.get(this); if (!s) throw new TypeError('Illegal invocation'); return JSON.parse(JSON.stringify(s.configuration)); });
+      method(KP, 'createMediaKeys', 0, function () {
+        if (!slots.get(this)) return reject(new TypeError('Illegal invocation'));
+        return Promise.resolve(typeof G.MediaKeys === 'function' ? inst(G.MediaKeys, {}) : {});
+      });
+      method(NP, 'requestMediaKeySystemAccess', 2, function (keySystem, configs) {
+        if (arguments.length < 2) return reject(new TypeError("Failed to execute 'requestMediaKeySystemAccess' on 'Navigator': 2 arguments required, but only " + arguments.length + ' present.'));
+        const ks = String(keySystem);
+        if (!ks) return reject(new TypeError("Failed to execute 'requestMediaKeySystemAccess' on 'Navigator': The keySystem parameter is empty."));
+        const list = configs && typeof configs[Symbol.iterator] === 'function' ? Array.from(configs) : null;
+        if (!list) return reject(new TypeError("Failed to execute 'requestMediaKeySystemAccess' on 'Navigator': The provided value cannot be converted to a sequence."));
+        if (!list.length) return reject(new TypeError("Failed to execute 'requestMediaKeySystemAccess' on 'Navigator': The supportedConfigurations parameter is empty."));
+        const unsupported = () => reject(new DOMException('Unsupported keySystem or supportedConfigurations.', 'NotSupportedError'));
+        if (ks !== 'com.widevine.alpha' && ks !== 'org.w3.clearkey') return unsupported();
+        for (const cfg of list) {
+          const c = cfg || {};
+          const caps = (k) => Array.isArray(c[k]) ? c[k] : [];
+          const video = caps('videoCapabilities').filter((v) => v && canPlay(v.contentType));
+          const audio = caps('audioCapabilities').filter((v) => v && canPlay(v.contentType));
+          if (caps('videoCapabilities').length && !video.length) continue;
+          if (caps('audioCapabilities').length && !audio.length) continue;
+          const init = (Array.isArray(c.initDataTypes) ? c.initDataTypes : []).filter((t) => ['cenc', 'keyids', 'webm'].includes(t));
+          if (Array.isArray(c.initDataTypes) && c.initDataTypes.length && !init.length) continue;
+          const cap = (v) => ({ contentType: String(v.contentType || ''), encryptionScheme: v.encryptionScheme == null ? null : String(v.encryptionScheme), robustness: String(v.robustness || '') });
+          const configuration = {
+            audioCapabilities: audio.map(cap), distinctiveIdentifier: 'not-allowed', initDataTypes: init, label: String(c.label || ''),
+            persistentState: c.persistentState === 'required' ? 'required' : 'not-allowed',
+            sessionTypes: Array.isArray(c.sessionTypes) && c.sessionTypes.length ? c.sessionTypes.map(String) : ['temporary'],
+            videoCapabilities: video.map(cap),
+          };
+          return Promise.resolve(inst(G.MediaKeySystemAccess, { keySystem: ks, configuration }));
+        }
+        return unsupported();
+      });
+    }
+
+    // --- Media Capabilities ----------------------------------------------
+    if (typeof G.MediaCapabilities === 'function') {
+      const MP = G.MediaCapabilities.prototype;
+      const info = (op, types, config) => {
+        const where = "Failed to execute '" + op + "' on 'MediaCapabilities': ";
+        if (!config || typeof config !== 'object') return reject(new TypeError(where + "1 argument required, but only 0 present."));
+        if (!types.includes(config.type)) return reject(new TypeError(where + "Failed to read the 'type' property from 'MediaConfiguration': The provided value '" + config.type + "' is not a valid enum value of type " + (op === 'decodingInfo' ? 'MediaDecodingType' : 'MediaEncodingType') + '.'));
+        if (!config.video && !config.audio) return reject(new TypeError(where + 'The configuration dictionary has neither |video| nor |audio| specified.'));
+        let ok = true;
+        if (config.video) ok = ok && canPlay(config.video.contentType);
+        if (config.audio) ok = ok && canPlay(config.audio.contentType);
+        const big = config.video && (+config.video.width * +config.video.height > 3840 * 2160 || +config.video.framerate > 120);
+        const res = { powerEfficient: ok && !big, smooth: ok && !big, supported: ok };
+        if (op === 'decodingInfo') res.keySystemAccess = null;
+        res.configuration = config;
+        return Promise.resolve(res);
+      };
+      method(MP, 'decodingInfo', 1, function (c) { return info('decodingInfo', ['file', 'media-source', 'webrtc'], c); });
+      method(MP, 'encodingInfo', 1, function (c) { return info('encodingInfo', ['record', 'webrtc'], c); });
+    }
+
+    // --- Built-in AI (Summarizer, Translator, LanguageDetector) ------------
+    const gesture = () => reject(new DOMException('Requires a user gesture when availability is "downloading" or "downloadable".', 'NotAllowedError'));
+    if (typeof G.Summarizer === 'function') {
+      method(G.Summarizer, 'availability', 0, function () { return Promise.resolve('downloadable'); });
+      method(G.Summarizer, 'create', 0, gesture);
+    }
+    if (typeof G.Translator === 'function') {
+      method(G.Translator, 'availability', 1, function (o) {
+        if (!o || !o.sourceLanguage || !o.targetLanguage) return reject(new TypeError("Failed to execute 'availability' on 'Translator': Failed to read the 'sourceLanguage' property from 'TranslatorCreateCoreOptions': Required member is undefined."));
+        return Promise.resolve(o.sourceLanguage === o.targetLanguage ? 'unavailable' : 'downloadable');
+      });
+      method(G.Translator, 'create', 1, gesture);
+    }
+    if (typeof G.LanguageDetector === 'function') {
+      const LD = G.LanguageDetector;
+      method(LD, 'availability', 0, function () { return Promise.resolve('available'); });
+      method(LD, 'create', 0, function () { return Promise.resolve(inst(LD, { inputQuota: Infinity, expectedInputLanguages: null })); });
+      method(LD.prototype, 'detect', 1, function (text) {
+        if (!slots.get(this)) return reject(new TypeError('Illegal invocation'));
+        const t = String(text || '');
+        const guess = /[À-ỹ]/.test(t) && /[ăâđêôơư]/i.test(t) ? 'vi' : /[a-z]/i.test(t) ? 'en' : 'und';
+        return Promise.resolve(guess === 'und' ? [{ detectedLanguage: 'und', confidence: 1 }] : [{ detectedLanguage: guess, confidence: 0.9 }, { detectedLanguage: 'und', confidence: 0.1 }]);
+      });
+      method(LD.prototype, 'measureInputUsage', 1, function (t) { return Promise.resolve(String(t || '').length); });
+    }
+
+    // --- Keyboard map -----------------------------------------------------
+    if (typeof G.Keyboard === 'function' && typeof G.KeyboardLayoutMap === 'function') {
+      collection(G.KeyboardLayoutMap, 'map');
+      const keys = [];
+      for (const ch of 'abcdefghijklmnopqrstuvwxyz') keys.push(['Key' + ch.toUpperCase(), ch]);
+      for (let d = 0; d < 10; d++) keys.push(['Digit' + d, String(d)]);
+      for (const [k, v] of [['Backquote', '`'], ['Minus', '-'], ['Equal', '='], ['BracketLeft', '['], ['BracketRight', ']'], ['Backslash', '\\'],
+        ['Semicolon', ';'], ['Quote', "'"], ['Comma', ','], ['Period', '.'], ['Slash', '/'], ['IntlBackslash', '\\']]) keys.push([k, v]);
+      const KP = G.Keyboard.prototype;
+      method(KP, 'getLayoutMap', 0, function () {
+        if (typeof window !== 'undefined' && window.top !== window) return reject(new DOMException('getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy.', 'InvalidStateError'));
+        return Promise.resolve(inst(G.KeyboardLayoutMap, { __data: new Map(keys) }));
+      });
+      method(KP, 'lock', 0, function () { return reject(new DOMException('Must be in fullscreen mode to lock the keyboard.', 'InvalidStateError')); });
+      method(KP, 'unlock', 0, function () {});
+    }
+
+    // NodeFilter is a callback interface: a function without a prototype.
+    if (typeof G.NodeFilter === 'function' && G.NodeFilter.prototype && typeof window !== 'undefined') {
+      const NF = makeNative('NodeFilter', 0, function () { throw new TypeError('Illegal constructor'); });
+      for (const k of Object.getOwnPropertyNames(G.NodeFilter)) {
+        if (/^[A-Z_]+$/.test(k)) Object.defineProperty(NF, k, Object.getOwnPropertyDescriptor(G.NodeFilter, k));
+      }
+      Object.defineProperty(G, 'NodeFilter', { value: NF, writable: true, enumerable: false, configurable: true });
+    }
+    for (const k of ['WEBGL_debug_renderer_info', 'WEBGL_lose_context']) {
+      if (hop.call(G, k)) { try { delete G[k]; } catch (e) { /* keep */ } }
+    }
   }
 })

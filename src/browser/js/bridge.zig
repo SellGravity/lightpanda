@@ -1326,6 +1326,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/ConstantSourceNode.zig"),
     @import("../webapi/webaudio/OscillatorNode.zig"),
     @import("../webapi/webaudio/GainNode.zig"),
+    @import("../webapi/webaudio/AnalyserNode.zig"),
     @import("../webapi/webaudio/ConvolverNode.zig"),
     @import("../webapi/webaudio/DynamicsCompressorNode.zig"),
 });

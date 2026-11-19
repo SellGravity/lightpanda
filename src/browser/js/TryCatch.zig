@@ -63,9 +63,24 @@ pub fn caught(self: *const TryCatch, allocator: Allocator) ?Caught {
         break :blk if (line < 0) null else @intCast(line);
     };
 
+    // Reading an object's message or stack can run page script (a getter, a
+    // Proxy trap), which Chrome never does for an uncaught exception: pages
+    // detect it. Such a value is logged inertly and without a stack.
+    const exception_handle = v8.v8__TryCatch__Exception(&self.handle);
+    const inert = if (exception_handle) |handle| blk: {
+        const value = js.Value{ .local = l, .handle = handle };
+        if (!value.isObject()) break :blk false;
+        break :blk value.descriptionRunsScript();
+    } else false;
+
     const exception: ?[]const u8 = blk: {
-        const handle = v8.v8__TryCatch__Exception(&self.handle) orelse break :blk null;
+        const handle = exception_handle orelse break :blk null;
         var js_val = js.Value{ .local = l, .handle = handle };
+        if (inert) {
+            var aw: std.Io.Writer.Allocating = .init(allocator);
+            js_val.format(&aw.writer) catch break :blk null;
+            break :blk aw.written();
+        }
 
         // If it's an Error object, try to get the message property
         if (js_val.isObject()) {
@@ -82,6 +97,7 @@ pub fn caught(self: *const TryCatch, allocator: Allocator) ?Caught {
     };
 
     const stack: ?[]const u8 = blk: {
+        if (inert) break :blk null;
         const handle = v8.v8__TryCatch__StackTrace(&self.handle, l.handle) orelse break :blk null;
         var js_val = js.Value{ .local = l, .handle = handle };
 

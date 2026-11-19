@@ -121,6 +121,25 @@ const RemoteObject = struct {
     }
 };
 
+// An error whose description would run page script (a planted `stack`
+// getter, a Proxy in its chain) is described without the inspector, which
+// reads those keys. No handle is minted for it: reading the getter is how
+// pages detect a CDP client listening to the console.
+fn inertError(arena: Allocator, value: js.Value) !?RemoteObject {
+    if (!value.isNativeError() or !value.descriptionRunsScript()) return null;
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try value.format(&aw.writer);
+    const description = aw.written();
+    const colon = std.mem.indexOf(u8, description, ": ") orelse description.len;
+    return .{
+        .type = "object",
+        .subtype = "error",
+        .className = description[0..colon],
+        .description = description,
+        .objectId = null,
+    };
+}
+
 // The frame an event happened in: its values are wrapped in that frame's
 // context, and its executionContextId is that context's. The main frame when
 // the frame is gone.
@@ -150,6 +169,10 @@ pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notif
 
     var args: std.ArrayList(RemoteObject) = .empty;
     for (event.values) |value| {
+        if (try inertError(arena, value)) |safe| {
+            try args.append(arena, safe);
+            continue;
+        }
         const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
         defer remote_object.deinit();
 
@@ -201,17 +224,20 @@ pub fn exceptionThrown(arena: Allocator, target: *CDP.Target, event: *const Noti
 
     const value = event.value;
     const local = inspectedContext(target, value.local, &ls.local);
-    const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
-    defer remote_object.deinit();
+    const exception = (try inertError(arena, value)) orelse blk: {
+        const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
+        defer remote_object.deinit();
 
-    var exception = RemoteObject{
-        .type = try remote_object.getType(arena),
-        .subtype = try remote_object.getSubtype(arena),
-        .className = try remote_object.getClassName(arena),
-        .description = try remote_object.getDescription(arena),
-        .objectId = try remote_object.getObjectId(arena),
+        var wrapped = RemoteObject{
+            .type = try remote_object.getType(arena),
+            .subtype = try remote_object.getSubtype(arena),
+            .className = try remote_object.getClassName(arena),
+            .description = try remote_object.getDescription(arena),
+            .objectId = try remote_object.getObjectId(arena),
+        };
+        try wrapped.setPrimitive(arena, value);
+        break :blk wrapped;
     };
-    try exception.setPrimitive(arena, value);
 
     // The location is 1-based, CDP's is 0-based.
     const location = event.location;
