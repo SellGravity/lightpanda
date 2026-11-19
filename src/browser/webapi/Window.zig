@@ -1174,7 +1174,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 }, .deletable = false });
+    // Deletable in the template so the persona bootstrap can put window's own
+    // properties in Chrome's order; it then makes it non-configurable again.
+    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 } });
     pub const console = bridge.accessor(Window.getConsole, Window.setConsole, .{});
 
     pub const top = bridge.accessor(Window.getTop, null, .{});
@@ -1193,7 +1195,7 @@ pub const JsApi = struct {
     pub const indexedDB = bridge.accessor(Window.getIndexedDB, null, .{});
     pub const caches = bridge.accessor(Window.getCaches, null, .{});
     pub const origin = bridge.accessor(Window.getOrigin, Window.setOrigin, .{});
-    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
+    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, Window.setNavigation, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});

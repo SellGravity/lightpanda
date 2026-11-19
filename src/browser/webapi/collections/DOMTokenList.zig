@@ -362,6 +362,16 @@ const Iterator = struct {
     }
 };
 
+// Object.keys / spread / for..in list the indexes, as in Chrome.
+fn getIndexes(self: *const DOMTokenList, frame: *Frame) !js.Array {
+    const n: u32 = try self.length(frame);
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DOMTokenList);
 
@@ -392,5 +402,5 @@ pub const JsApi = struct {
     pub const entries = bridge.function(DOMTokenList.entries, .{});
     pub const symbol_iterator = bridge.iterator(DOMTokenList.values, .{});
     pub const forEach = bridge.function(DOMTokenList.forEach, .{});
-    pub const @"[]" = bridge.indexed(DOMTokenList.item, null, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(DOMTokenList.item, DOMTokenList.getIndexes, .{ .null_as_undefined = true });
 };

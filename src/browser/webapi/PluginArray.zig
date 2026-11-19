@@ -77,6 +77,20 @@ fn getLength(_: *const PluginArray) u32 {
     return count();
 }
 
+fn getIndexes(_: *const PluginArray, frame: *Frame) !js.Array {
+    return indexList(count(), frame);
+}
+
+// Indexed enumerator: Object.keys / spread / for..in list "0".."n-1", as on
+// Chrome's PluginArray, MimeTypeArray and Plugin.
+fn indexList(n: u32, frame: *Frame) !js.Array {
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const Plugin = struct {
     _index: u8 = 0,
 
@@ -96,6 +110,9 @@ pub const Plugin = struct {
     fn item(_: *const Plugin, index: usize, frame: *Frame) !?*MimeTypeArray.MimeType {
         return frame.window._navigator._mime_types.getAtIndex(index, frame);
     }
+    fn getIndexes(_: *const Plugin, frame: *Frame) !js.Array {
+        return indexList(if (exposed()) MimeTypeArray.mime_types.len else 0, frame);
+    }
     fn namedItem(_: *const Plugin, name: []const u8, frame: *Frame) !?*MimeTypeArray.MimeType {
         return frame.window._navigator._mime_types.getByName(name, frame);
     }
@@ -110,7 +127,7 @@ pub const Plugin = struct {
         pub const filename = bridge.accessor(Plugin.getFilename, null, .{});
         pub const description = bridge.accessor(Plugin.getDescription, null, .{});
         pub const length = bridge.accessor(Plugin.getLength, null, .{});
-        pub const @"[int]" = bridge.indexed(Plugin.item, null, .{ .null_as_undefined = true });
+        pub const @"[int]" = bridge.indexed(Plugin.item, Plugin.getIndexes, .{ .null_as_undefined = true });
         pub const item = bridge.function(struct {
             fn wrap(self: *const Plugin, index: i32, frame: *Frame) !?*MimeTypeArray.MimeType {
                 if (index < 0) return null;
@@ -149,7 +166,7 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(PluginArray.getLength, null, .{});
     pub const refresh = bridge.function(PluginArray.refresh, .{});
-    pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, PluginArray.getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, null, struct {
         fn wrap(_: *const PluginArray, _: []const u8) !u32 {
             return error.NotHandled;

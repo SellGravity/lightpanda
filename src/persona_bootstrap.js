@@ -313,7 +313,8 @@
   // end) and enumerable keys.
   const tail = Array.from(new Set([...Object.getOwnPropertyNames(window).slice(-200), ...Object.keys(window).slice(-80)]));
   Object.defineProperty(window, 'chrome', {
-    value: { app, csi, loadTimes }, writable: true, enumerable: true, configurable: false,
+    // configurable until reorderWindow() has put it in place
+    value: { app, csi, loadTimes }, writable: true, enumerable: true, configurable: true,
   });
   for (const k of tail) {
     const d = Object.getOwnPropertyDescriptor(window, k);
@@ -323,6 +324,7 @@
       Object.defineProperty(window, k, d);
     } catch (e) { /* keep going */ }
   }
+  reorderWindow(parityTable);
 
   // Chrome's window surface. Version detectors (CreepJS "windowVersion",
   // BrowserScan kernel check) map own window names to the Chrome release that
@@ -954,7 +956,7 @@
     const GL1 = G.WebGLRenderingContext, GL2 = G.WebGL2RenderingContext;
     if (typeof GL1 === 'function') {
       const extDefs = new Map();
-      const extPart = (table || '').split('\n#EXT\n')[1] || '';
+      const extPart = ((table || '').split('\n#EXT\n')[1] || '').split('\n#WIN\n')[0];
       for (const e of extPart.split(';')) { const i = e.indexOf('|'); if (i > 0) extDefs.set(e.slice(0, i), e.slice(i + 1)); }
       const extProtos = new Map();
       const extProto = (name) => {
@@ -1290,6 +1292,42 @@
         }),
         enumerable: false, configurable: true,
       });
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // window's own properties in Chrome's creation order (Object.keys(window)
+  // and getOwnPropertyNames(window) are hashed by fingerprinters). The JS
+  // builtins already match (same V8); everything after them is re-added in
+  // the order a Chrome 157 window has, names Chrome lacks go last. Then the
+  // [LegacyUnforgeable] ones and window.chrome become non-configurable.
+  // ---------------------------------------------------------------------
+  function reorderWindow(table) {
+    const W = window;
+    const section = (table || '').split('\n#WIN\n')[1];
+    if (section) {
+      const order = section.split(',');
+      const start = order.indexOf('isNaN') + 1;
+      const listed = new Set(order);
+      const extras = Object.getOwnPropertyNames(W).filter((k) => !listed.has(k));
+      const move = (k) => {
+        const d = Object.getOwnPropertyDescriptor(W, k);
+        if (!d || !d.configurable) return;
+        // own but not enumerable in Chrome
+        if (k === 'CSS' || k === 'offscreenBuffering') d.enumerable = false;
+        try {
+          delete W[k];
+          Object.defineProperty(W, k, d);
+        } catch (e) { /* keep it where it is */ }
+      };
+      if (start > 0) {
+        for (let i = start; i < order.length; i++) move(order[i]);
+        for (const k of extras) move(k);
+      }
+    }
+    for (const k of ['window', 'document', 'location', 'top', 'chrome']) {
+      const d = Object.getOwnPropertyDescriptor(W, k);
+      if (d && d.configurable) { try { Object.defineProperty(W, k, { configurable: false }); } catch (e) { /* keep */ } }
     }
   }
 })

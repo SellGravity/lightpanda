@@ -152,6 +152,16 @@ fn setAtIndex(self: *HTMLOptionsCollection, index: u32, option_: ?*Option, frame
     _ = try select_node.appendChild(option, frame);
 }
 
+// Object.keys / spread / for..in list the indexes, as in Chrome.
+fn getIndexes(self: *HTMLOptionsCollection, frame: *Frame) !js.Array {
+    const n: u32 = self.length(frame);
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLOptionsCollection);
 
@@ -164,7 +174,7 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(HTMLOptionsCollection.length, setLength, .{ .ce_reactions = true });
 
     // Indexed access
-    pub const @"[int]" = bridge.indexedReadWrite(HTMLOptionsCollection.getAtIndex, setAtIndex, null, null, null, .{ .null_as_undefined = true, .ce_reactions = true });
+    pub const @"[int]" = bridge.indexedReadWrite(HTMLOptionsCollection.getAtIndex, setAtIndex, null, null, HTMLOptionsCollection.getIndexes, .{ .null_as_undefined = true, .ce_reactions = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, null, struct {
         fn wrap(self: *HTMLOptionsCollection, name: []const u8) !u32 {
             if (self.getByName(name) != null) {

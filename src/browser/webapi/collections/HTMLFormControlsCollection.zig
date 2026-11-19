@@ -154,6 +154,16 @@ pub const Iterator = struct {
     }
 };
 
+// Object.keys / spread / for..in list the indexes, as in Chrome.
+fn getIndexes(self: *HTMLFormControlsCollection, frame: *Frame) !js.Array {
+    const n: u32 = self.length(frame);
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLFormControlsCollection);
 
@@ -164,7 +174,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLFormControlsCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexed(HTMLFormControlsCollection.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(HTMLFormControlsCollection.getAtIndex, HTMLFormControlsCollection.getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLFormControlsCollection.namedItem, null, null, null, struct {
         fn wrap(self: *HTMLFormControlsCollection, name: []const u8) !u32 {
             if (try hasNamed(self, name)) {

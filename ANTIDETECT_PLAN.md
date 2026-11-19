@@ -8,7 +8,9 @@ InviPanda là một engine **headless, nhẹ** (mỗi profile ~20–120 MB RAM) 
 
 | Hạng mục | Kết quả |
 |---|---|
-| Test upstream (`make test`, chạy trên FS Linux) | **2426/2426** qua |
+| Test upstream (`make test`, chạy trên FS Linux) | **2427/2427** qua |
+| **deviceandbrowserinfo** `/are_you_a_bot` (2026-11-19) | **`isBot: false`**: hết `isAutomatedWithCDP` (cả worker), hết `hasInconsistentTimingResolution` |
+| **fingerprint-scan.com** (2026-11-19) | CDP check / CDP stack check / worker / iframe đều `false`; WebGPU, Widevine, mediaCapabilities, Summarizer, keyboard map, audio extended, scrollbar 15px, WebGL2 params khớp Chrome thật |
 | **BrowserScan** | **100%**, Bot Detection: không phát hiện. Server trả `isBrowserCorrect=1`, kernel `windowVersion 139-140`, `liedWindow=false` |
 | **pixelscan** `/fingerprint-check` | **"Your Browser Fingerprint is consistent"**, No masking / No proxy / No automated behavior. Nhận đúng "Chrome 140 on Windows", font Windows 55/55 (`osFontsStatus: true`), hash hộp đỏ WebGL trùng Chrome |
 | sannysoft | Tất cả qua |
@@ -71,13 +73,27 @@ Switch được hỗ trợ:
 | WebGL | Rasterizer phần mềm (tam giác màu phẳng, clear, viewport, readPixels); `length` của mọi method đúng Chrome; WebGL trên OffscreenCanvas (cả trong worker) | persona_bootstrap.js, OffscreenCanvas.zig |
 | Canvas / font | Nhiễu chỉ trên pixel khử răng cưa (vùng tô đặc và đường biên giữa chúng giữ nguyên). Mỗi font có độ lệch baseline dưới-pixel riêng nên các font khác nhau ra hình khác nhau | raster.zig, fonts.zig |
 | iframe | `src="javascript:…"` chạy script trong about:blank cùng origin (pixelscan dùng để so sánh vân tay) | Frame.zig |
+| CDP không lộ | Khi automation bật `Runtime.enable`, serialize console/exception **không bao giờ chạy getter của trang** (`stack`, `message`, `name`, Proxy, `Error.prepareStackTrace`): mẹo "Error có getter stack + console.debug" không còn bắt được CDP | cdp/domains/runtime.zig, js/Value.zig, js/TryCatch.zig |
+| Đồng hồ | `performance.now()`, `event.timeStamp`, PerformanceEntry làm tròn 100µs kèm jitter như TimeClamper của Chrome; `timeOrigin` 100µs | Performance.zig, Event.zig |
+| Prototype parity | **4.938 member** của Chrome (method, getter/setter, hằng số, `length`) bổ sung cho mọi interface, **lọc theo phiên bản Chrome của persona** (dữ liệu MDN browser-compat-data). Gọi trên prototype → "Illegal invocation"; thiếu tham số → thông báo "Failed to execute … N argument(s) required" của Chrome; giá trị trả về đúng kiểu WebIDL (Promise, đối tượng interface, boolean…, lấy từ IDL spec @webref/idl) | persona_bootstrap.js `parity()`, persona_parity.txt |
+| API sâu | WebGL2 có prototype riêng (không kế thừa WebGL1, như Chrome), **mọi object extension** + hằng số, tham số WebGL2; WebGPU (adapter, features/limits theo phiên bản, `info.vendor/architecture` suy từ GPU persona); EME **Widevine** (`requestMediaKeySystemAccess`), `mediaCapabilities.decodingInfo/encodingInfo`; Summarizer/Translator/LanguageDetector; `navigator.keyboard.getLayoutMap()` (48 phím); Trusted Types thật (createPolicy/createHTML…) | persona_bootstrap.js `deepApis()` |
+| AnalyserNode | Node thật: cửa sổ Blackman + FFT + smoothing + dB như RealtimeAnalyser của Chrome (`reduction`, tổng time-domain khớp Chrome tới chữ số thứ 7) | webaudio/AnalyserNode.zig |
+| Math | Persona Chrome < 150 dùng **fdlibm của V8 trước 2026** (biên dịch nguyên bản `ieee754.cc`) cho acos/asin/atan/atan2/cbrt/cosh/exp/expm1/log*/sinh/tan/tanh…: khớp bit-for-bit với Chrome cũ (V8 15.5 của Lightpanda đã đổi sang LLVM libm) | fdlibm/legacy_math.cc, js/native_shim.zig |
+| Secure context | Trên http: gỡ đúng danh sách API chỉ có ở secure context của Chrome (navigator.gpu/keyboard/deviceMemory…, ~200 global, `crypto.subtle`) | persona_bootstrap.js |
+| Scrollbar | `overflow: scroll` và root scroller trừ bề rộng thanh cuộn: 15px (Windows 11, Fluent), 17px (Windows 10), 15px Linux, 0 macOS/mobile | Element.zig, StyleManager.zig |
+| Extension mặc định | `chrome-extension://ghbmnn…/page_embed_script.js` (Google Docs Offline, có sẵn trong Chrome desktop) trả đúng nội dung thật, 339 byte | network/HttpClient.zig |
+| WebRTC ICE | Gathering y như Chrome: `gathering` → candidate host mDNS `<uuid>.local` → `complete` → candidate `null`, event trusted; `RTCIceCandidate` native. Không bao giờ lộ IP | RTCPeerConnection.zig |
+| Chuỗi prototype window | Có object `WindowProperties`; global và cả chuỗi prototype là **immutable prototype** (setPrototypeOf ném đúng lỗi của Chrome) | persona_bootstrap.js |
+| Rects | Giá trị nằm trên lưới LayoutUnit 1/64px như Chrome; nhiễu dịch đúng 1 đơn vị trên các cạnh lẻ (không bao giờ ra 59.9998…) | Element.zig |
 | Khác | speechSynthesis (giọng Microsoft + Google), quota lưu trữ, `FontFace.load`, màu hệ thống, `/json/version` và `Browser.getVersion` trả lời như Chrome, `Browser.close` kết thúc process, telemetry luôn tắt | SpeechSynthesis.zig, server/http.zig, cdp/domains/browser.zig |
 
 ## 4. Giới hạn còn lại
 
 1. **Pixel không giống hệt Chrome thật**: font DejaVu và cách khử răng cưa của tiny-skia khác Skia. Hash canvas là duy nhất cho từng profile, nhưng không trùng hash của "một máy Windows thật" nào.
 2. **Layout xấp xỉ**: không có engine layout thật; vị trí, kích thước phần tử là ước lượng.
-3. **WebRTC chỉ là bề mặt**: có `RTCPeerConnection` chống rò IP nhưng không có media thật.
+3. **WebRTC chỉ là bề mặt**: ICE gathering chạy đúng trình tự Chrome nhưng chỉ có candidate host mDNS (không srflx vì không có STUN thật), không có media thật.
+8. **Cloudflare managed challenge / Turnstile chưa qua**: VM bytecode của Turnstile vẫn rơi vào nhánh lỗi (code 300010) ngay sau bước dò WebRTC. Đã sửa các khác biệt nó phát hiện (Trusted Types, ICE event, chuỗi prototype immutable, giá trị trả về đúng kiểu); phần còn lại cần dịch ngược VM.
+9. **CSP chưa được thực thi**: script inline không có nonce vẫn chạy (Chrome chặn). Trang có thể dùng việc này để phân biệt.
 4. **Không có bản Windows native**: chạy qua WSL2 (hoặc Docker).
 5. **WebGL chỉ vẽ được hình màu phẳng**: đủ cho các bài kiểm tra kiểu "hộp đỏ"; shader phức tạp (gradient, texture) thì không ra pixel.
 6. BrowserScan có bảng phiên bản CSS riêng (server) đọc ra `cssVersion 133-134` cho persona 140 (lệch 6). Không bị trừ điểm (chỉ tính khi CSS, JS và window cùng lệch), nhưng chưa khớp hẳn.

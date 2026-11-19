@@ -109,6 +109,16 @@ pub const Iterator = GenericIterator(struct {
     }
 }, null);
 
+// Object.keys / spread / for..in list the indexes, as in Chrome.
+fn getIndexes(self: *HTMLAllCollection, frame: *Frame) !js.Array {
+    const n: u32 = self.length(frame);
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLAllCollection);
 
@@ -123,7 +133,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLAllCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, HTMLAllCollection.getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, struct {
         fn wrap(self: *HTMLAllCollection, name: []const u8) !u32 {
             if (self.getByName(name) != null) {

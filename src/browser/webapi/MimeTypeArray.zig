@@ -61,6 +61,16 @@ fn getLength(_: *const MimeTypeArray) u32 {
     return count();
 }
 
+// Object.keys / spread list the indexes, as on Chrome.
+fn getIndexes(_: *const MimeTypeArray, frame: *Frame) !js.Array {
+    const n = count();
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const MimeType = struct {
     _index: u8 = 0,
 
@@ -118,7 +128,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(MimeTypeArray.getLength, null, .{});
-    pub const @"[int]" = bridge.indexed(MimeTypeArray.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(MimeTypeArray.getAtIndex, MimeTypeArray.getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(MimeTypeArray.getByName, null, null, null, struct {
         fn wrap(_: *const MimeTypeArray, _: []const u8) !u32 {
             return error.NotHandled;

@@ -55,6 +55,16 @@ const Iterator = struct {
     }
 };
 
+// Object.keys / spread / for..in list the indexes, as in Chrome.
+fn getIndexes(self: *const StyleSheetList, frame: *Frame) !js.Array {
+    const n: u32 = self.length();
+    var arr = frame.js.local.?.newArray(n);
+    for (0..n) |i| {
+        _ = try arr.set(@intCast(i), i, .{});
+    }
+    return arr;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(StyleSheetList);
 
@@ -64,6 +74,6 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(StyleSheetList.length, null, .{});
-    pub const @"[]" = bridge.indexed(StyleSheetList.item, null, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(StyleSheetList.item, StyleSheetList.getIndexes, .{ .null_as_undefined = true });
     pub const symbol_iterator = bridge.iterator(StyleSheetList.values, .{});
 };
