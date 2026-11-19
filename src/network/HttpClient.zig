@@ -1819,7 +1819,9 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Fetch.getResponseBody") or
         std.mem.eql(u8, method, "Fetch.failRequest") or
         std.mem.eql(u8, method, "Fetch.fulfillRequest") or
-        std.mem.eql(u8, method, "Fetch.continueWithAuth");
+        std.mem.eql(u8, method, "Fetch.continueWithAuth") or
+        // only records the answer for the dialog blocking the script
+        std.mem.eql(u8, method, "Page.handleJavaScriptDialog");
 }
 
 // True for inbox messages that mean "this page/connection is going away".

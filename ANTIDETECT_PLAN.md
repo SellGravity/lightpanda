@@ -119,6 +119,14 @@ Phía launcher (gravbrowser) **đã làm** trên nhánh `feat/lightpanda-engine`
 - [x] Bản build đầy đủ: không cần truyền `--ua-full-version` nữa. UA có build đầy đủ (`Chrome/143.0.7490.0`) thì gửi UA rút gọn và dùng build cho client hints; UA đã rút gọn thì lấy build thật của bản phát hành + patch riêng từng profile.
 - [ ] Phân phối runtime: `scripts/invipanda-package.sh` → `dist/invipanda-linux-x86_64.tar.gz`, cài bằng `scripts/invipanda-install-wsl.sh`.
 
+Phía engine, để khớp đúng cách `cdp.service.ts` và API ngoài dùng CDP (chế độ launcher):
+- **Một browser cho cả process, giống Chrome**: browser khởi động cùng server và có sẵn một tab `about:blank`. Client đến rồi đi, còn tab, trạng thái trang và cookie vẫn giữ nguyên. `/json` liệt kê các tab theo định dạng Chrome, mỗi tab có `webSocketDebuggerUrl` `/devtools/page/<id>`. Socket của tab nhận lệnh không cần `sessionId`, event gửi về cũng không kèm `sessionId`. `/devtools/browser/<id>` dùng cho Puppeteer/Playwright.
+- Mỗi lúc chỉ có một client. Client mới (ví dụ `switchToTarget` đóng socket cũ rồi nối ngay socket mới, hoặc Puppeteer qua `cdpEndpoint`) sẽ tiếp quản browser, còn client cũ bị ngắt. Chrome cho nhiều client cùng lúc; ở đây hai client cùng chạy sẽ đá nhau.
+- **Cookie lưu theo profile**: `<user-data-dir>/InviPanda/Cookies.json` được nạp khi khởi động và ghi lại khi cookie đổi (tối đa 1 lần/giây; ghi ngay khi xoá cookie hoặc khi trang tải xong). Seed cookie của launcher, vốn chỉ áp một lần, vẫn còn sau khi khởi động lại.
+- **Dialog chặn script như Chrome**: `alert`/`confirm`/`prompt` chờ `Page.handleJavaScriptDialog`. Lệnh `Input.*` mở dialog được trả lời ngay, nên node "click" rồi node "accept alert" chạy đúng như trên Chrome. Nếu không ai trả lời trong 10 giây, dialog bị đóng cho script, và một `handleJavaScriptDialog` đến muộn vẫn thành công.
+- `Emulation.setPageScaleFactor` có hỗ trợ.
+- Kiểm chứng bằng harness `invi-compat.mjs`: launch giống hệt gravbrowser, gọi hơn 55 method CDP mà app dùng, kiểm tra reconnect, takeover, switchToTarget và cookie sau khi khởi động lại. Kết quả **64/64**.
+
 ## 6. Build và test
 
 ```bash

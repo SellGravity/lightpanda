@@ -124,6 +124,18 @@ bidi_session_url: []const u8,
 
 json_version_response: []const u8,
 
+// SellGravity antidetect: launcher mode runs one CDP browser for the whole
+// process, like Chrome (see CDP.persistent). /json lists its pages from the
+// snapshot its worker publishes; a client connecting while another holds the
+// link takes over once that one is released.
+persistent_cdp: ?*Worker = null,
+cdp_ws_base: []const u8 = "",
+cdp_targets_mutex: std.Io.Mutex = .init,
+cdp_targets_json: std.ArrayList(u8) = .empty,
+pending_cdp: ?PendingCdp = null,
+
+const PendingCdp = struct { socket: posix.socket_t, page: [64]u8, page_len: u8 };
+
 pub const Address = union(enum) {
     ip: sys_net.IpAddress,
     unix: [:0]const u8, // Absolute path, validated by Config
@@ -159,6 +171,8 @@ pub fn init(app: *App, address: Address) !*Server {
 
     const json_version_response = try http.buildJSONVersionResponse(app, ws_url);
     errdefer allocator.free(json_version_response);
+    const cdp_ws_base = try allocator.dupe(u8, std.mem.trimEnd(u8, ws_url, "/"));
+    errdefer allocator.free(cdp_ws_base);
 
     const bidi_session_url = try allocator.print("{s}session/", .{ws_url});
     errdefer allocator.free(bidi_session_url);
@@ -217,6 +231,7 @@ pub fn init(app: *App, address: Address) !*Server {
         .http_connections = .{},
         .http_connection_pool = http_connection_pool,
         .json_version_response = json_version_response,
+        .cdp_ws_base = cdp_ws_base,
         .bidi_session_url = bidi_session_url,
         .max_connections = max_connections,
         .workers = .{},
@@ -299,6 +314,8 @@ pub fn deinit(self: *Server) void {
     self.worker_drain.deinit(allocator);
     self.http_connection_pool.deinit();
     allocator.free(self.json_version_response);
+    allocator.free(self.cdp_ws_base);
+    self.cdp_targets_json.deinit(allocator);
     allocator.free(self.bidi_session_url);
     closeListener(self.listener, self.unix_path);
     self.io_engine.deinit();
@@ -316,6 +333,13 @@ pub fn run(self: *Server) void {
         log.fatal(.serve, "io listen", .{ .err = err });
         return;
     };
+
+    if (lp.Persona.active and self.protocols.cdp and self.persistent_cdp == null) {
+        self.persistent_cdp = self.spawnWorker(.cdp, .persistent) catch |err| blk: {
+            log.err(.serve, "persistent browser", .{ .err = err });
+            break :blk null;
+        };
+    }
 
     while (self.runOnce()) {}
 }
@@ -540,12 +564,16 @@ pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Prot
 // a *EXISTING* Worker. Some WebDrivers (e.g. Selenium) go this route.
 pub fn attachConnection(self: *Server, worker: *Worker, conn: *Connection) void {
     self.detachConnection(conn); // removes from the loop, will get re-added
+    self.attachSocket(worker, conn.socket, "");
+}
 
+fn attachSocket(self: *Server, worker: *Worker, socket: posix.socket_t, page: []const u8) void {
     lp.assert(worker.link == null, "Server.deliverLink held", .{});
-    const link = Link.create(self.app, conn.socket, worker.protocol, &worker.inbox) catch |err| {
+    const link = Link.create(self.app, socket, worker.protocol, &worker.inbox) catch |err| {
         log.err(.serve, "link create", .{ .err = err });
         return;
     };
+    if (page.len > 0) link.setPageTarget(page);
 
     // precedes anything read off the socket
     self.push(worker, .{ .link = link });
@@ -575,7 +603,7 @@ pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Orig
         .server = self,
         .protocol = protocol,
         .session_id = switch (origin) {
-            .socket => null,
+            .socket, .persistent => null,
             .session => |session| session.id,
         },
     };
@@ -776,9 +804,54 @@ fn releaseLink(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) 
     self.markIdle(worker, now);
     // The worker is free to destroy the link from here.
     notify.set(lp.io);
+
+    if (self.persistent_cdp == worker) {
+        if (self.pending_cdp) |pending| {
+            self.pending_cdp = null;
+            self.attachSocket(worker, pending.socket, pending.page[0..pending.page_len]);
+        }
+    }
+}
+
+/// A CDP client for the persistent browser: attach now, or take the link
+/// over from the current client (it is dropped; this one attaches as soon as
+/// the worker has let go of it).
+pub fn attachPersistentCdp(self: *Server, conn: *Connection, page: []const u8) void {
+    const worker = self.persistent_cdp.?;
+    self.detachConnection(conn); // the fd moves to the worker's link
+    if (worker.link == null) {
+        return self.attachSocket(worker, conn.socket, page);
+    }
+    // a newer client wins the queue too
+    if (self.pending_cdp) |old| sys_net.close(old.socket);
+    var pending: PendingCdp = .{ .socket = conn.socket, .page = undefined, .page_len = @intCast(@min(page.len, 64)) };
+    @memcpy(pending.page[0..pending.page_len], page[0..pending.page_len]);
+    self.pending_cdp = pending;
+    if (!worker.linkDropping()) self.dropWebSocket(worker, null, true);
+}
+
+/// Called from the CDP worker: its current page list for /json.
+pub fn publishCdpTargets(self: *Server, json: []const u8) void {
+    self.cdp_targets_mutex.lockUncancelable(lp.io);
+    defer self.cdp_targets_mutex.unlock(lp.io);
+    self.cdp_targets_json.clearRetainingCapacity();
+    self.cdp_targets_json.appendSlice(self.app.allocator, json) catch {};
+}
+
+/// The persistent browser's /json, copied into `out`.
+pub fn cdpTargetsJson(self: *Server, out: *std.Io.Writer) !void {
+    self.cdp_targets_mutex.lockUncancelable(lp.io);
+    defer self.cdp_targets_mutex.unlock(lp.io);
+    if (self.cdp_targets_json.items.len == 0) return out.writeAll("[]");
+    try out.writeAll(self.cdp_targets_json.items);
+}
+
+pub fn cdpWsBase(self: *const Server) []const u8 {
+    return self.cdp_ws_base;
 }
 
 fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) void {
+    if (self.persistent_cdp == worker) self.persistent_cdp = null;
     self.unmonitorLink(worker);
     worker.link = null;
     if (worker.http_request) |parked| {
@@ -1374,6 +1447,8 @@ pub const Worker = struct {
     pub const Origin = union(enum) {
         socket: posix.socket_t,
         session: Session,
+        // launcher mode's process-wide CDP browser, born without a client
+        persistent,
 
         pub const Session = struct {
             id: [36]u8,
@@ -1408,10 +1483,20 @@ pub const Worker = struct {
         const allocator = server.app.allocator;
         switch (self.protocol) {
             .cdp => {
+                if (origin == .persistent) {
+                    const cdp = try allocator.create(CDP);
+                    defer allocator.destroy(cdp);
+                    try cdp.initDetached(server.app, self);
+                    defer cdp.deinit();
+                    cdp.bindPage(null); // a page from the start, as Chrome has a tab
+                    cdp.publishTargets();
+                    self.run(.init(.{ .cdp = cdp }, &self.inbox), null);
+                    return;
+                }
                 // only WebDriver has HTTP sessions
                 const socket = switch (origin) {
                     .socket => |socket| socket,
-                    .session => return error.NoSocket,
+                    .session, .persistent => return error.NoSocket,
                 };
                 const cdp = try allocator.create(CDP);
                 defer allocator.destroy(cdp);
@@ -1423,6 +1508,7 @@ pub const Worker = struct {
                 const bidi = try allocator.create(BiDi);
                 defer allocator.destroy(bidi);
                 try bidi.init(server.app, &self.inbox, switch (origin) {
+                    .persistent => return error.NoSocket,
                     .socket => |socket| .{ .socket = socket },
                     .session => |session| .{ .session = .{
                         .id = session.id,

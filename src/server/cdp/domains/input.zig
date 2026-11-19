@@ -33,6 +33,9 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setInterceptDrags,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
+    const prev = cmd.cdp.input_cmd;
+    cmd.cdp.input_cmd = cmd;
+    defer cmd.cdp.input_cmd = prev;
     switch (action) {
         .dispatchDragEvent => return dispatchDragEvent(cmd),
         .dispatchKeyEvent => return dispatchKeyEvent(cmd),

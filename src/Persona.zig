@@ -431,6 +431,19 @@ pub fn translateArgs(allocator: Allocator, proc_args: std.process.Args) !std.pro
             try appendOpt(allocator, &out, "--http-proxy", p);
         }
     }
+    // A launcher profile keeps its cookies in its own directory across runs,
+    // like Chromium's profile: loaded at start, written as they change.
+    if (!has_command) {
+        if (raw.user_data_dir) |dir| {
+            if (dir.len > 0) {
+                const state_dir = try std.fs.path.join(allocator, &.{ dir, "InviPanda" });
+                std.Io.Dir.cwd().createDirPath(@import("lightpanda").io, state_dir) catch {};
+                const cookies = try std.fs.path.join(allocator, &.{ state_dir, "Cookies.json" });
+                try appendOpt(allocator, &out, "--cookie", cookies);
+                try appendOpt(allocator, &out, "--cookie-jar", cookies);
+            }
+        }
+    }
 
     try apply(allocator, &raw);
 
@@ -959,6 +972,12 @@ test "Persona: translateArgs rewrites a launcher argv" {
         current = saved;
     }
 
+    // the profile keeps its cookies under <user-data-dir>/InviPanda
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const profile = try tmp.dir.realPathFileAlloc(@import("lightpanda").io, ".", a);
+    const udd = try std.fmt.allocPrintSentinel(a, "--user-data-dir={s}", .{profile}, 0);
+
     const argv = [_][*:0]const u8{
         "lightpanda",
         "--remote-debugging-port=9333",
@@ -972,7 +991,7 @@ test "Persona: translateArgs rewrites a launcher argv" {
         "--disable-features=Translate",
         "--no-first-run",
         "--canvas-noise",
-        "--user-data-dir=/tmp/profile-1",
+        udd,
         "--load-extension=/tmp/ext-a,/tmp/ext-b",
         "--webrtc-ip-handling-policy=disable_non_proxied_udp",
         "https://example.com/startup",
@@ -987,10 +1006,12 @@ test "Persona: translateArgs rewrites a launcher argv" {
         try joined.appendSlice(a, std.mem.span(arg));
         try joined.append(a, ' ');
     }
-    try testing.expectEqualStrings(
-        "serve --load-resources image,iframe,worker,stylesheet,beacon --host 127.0.0.1 --port 9333 --timezone Asia/Ho_Chi_Minh --locale vi-VN --http-proxy socks5h://u:p@1.2.3.4:1080 ",
-        joined.items,
-    );
+    const cookies = try std.fmt.allocPrint(a, "{s}/InviPanda/Cookies.json", .{profile});
+    const expected = try std.fmt.allocPrint(a, "serve --load-resources image,iframe,worker,stylesheet,beacon --host 127.0.0.1 --port 9333 --timezone Asia/Ho_Chi_Minh --locale vi-VN --http-proxy socks5h://u:p@1.2.3.4:1080 --cookie {s} --cookie-jar {s} ", .{ cookies, cookies });
+    try testing.expectEqualStrings(expected, joined.items);
+    // the directory exists for the jar to be written into
+    var state = try tmp.dir.openDir(@import("lightpanda").io, "InviPanda", .{});
+    state.close(@import("lightpanda").io);
 
     const p = get();
     try testing.expectEqual(Os.windows, p.os);

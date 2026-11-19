@@ -174,6 +174,14 @@ network_limits: network_domain.BufferLimits = .{},
 // own message arena.
 pending_dialog_response: ?Notification.DialogResponse = null,
 
+// SellGravity antidetect: a dialog blocks its script until the client
+// answers it with Page.handleJavaScriptDialog, as in Chrome.
+dialog_waiting: bool = false,
+dialog_answer: ?Notification.DialogResponse = null,
+// The wait gave up (the dialog was dismissed for the script); a late
+// Page.handleJavaScriptDialog still finds it showing.
+dialog_lingering: bool = false,
+
 // Allocates the target. Its page is bound later, by onFrameCreated.
 pub fn init(bc: *BrowserContext, group_id: js.Inspector.GroupId) !*Target {
     const allocator = bc.cdp.allocator;

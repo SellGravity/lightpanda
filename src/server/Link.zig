@@ -63,6 +63,10 @@ send_depth: u32,
 send_timeout_ms: i32,
 max_inbox_backlog: usize,
 peer_closed: bool,
+// SellGravity antidetect: the page a CDP client connected to through
+// /devtools/page/<id> (Chrome's per-page socket), empty for a browser socket.
+page_target_buf: [64]u8 = undefined,
+page_target_len: u8 = 0,
 
 pub fn init(
     self: *Link,
@@ -96,6 +100,19 @@ pub fn init(
         .max_inbox_backlog = @as(usize, config.cdpMaxMessageSize()) * INBOX_BACKLOG_MESSAGES,
         .peer_closed = false,
     };
+}
+
+/// The page this socket was opened for (see page_target_buf), null for a
+/// browser-level socket.
+pub fn pageTarget(self: *const Link) ?[]const u8 {
+    if (self.page_target_len == 0) return null;
+    return self.page_target_buf[0..self.page_target_len];
+}
+
+pub fn setPageTarget(self: *Link, id: []const u8) void {
+    const n = @min(id.len, self.page_target_buf.len);
+    @memcpy(self.page_target_buf[0..n], id[0..n]);
+    self.page_target_len = @intCast(n);
 }
 
 pub fn deinit(self: *Link) void {

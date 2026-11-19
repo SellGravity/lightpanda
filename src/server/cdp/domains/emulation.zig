@@ -40,6 +40,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setTimezoneOverride,
         setScriptExecutionDisabled,
         setDefaultBackgroundColorOverride,
+        setPageScaleFactor,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -56,6 +57,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setScriptExecutionDisabled => return setScriptExecutionDisabled(cmd),
         // Nothing is painted with a background.
         .setDefaultBackgroundColorOverride => return cmd.sendResult(null, .{}),
+        // Pinch zoom: nothing is painted, and layout (like Chrome's) ignores it.
+        .setPageScaleFactor => return cmd.sendResult(null, .{}),
     }
 }
 

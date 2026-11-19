@@ -69,7 +69,8 @@ pub fn init(impl: Impl, inbox: *Inbox) Driver {
 // server loop. Whether losing the link ends the worker.
 pub fn connectionScoped(self: *const Driver) bool {
     return switch (self.impl) {
-        .cdp => true, // always true for CDP; CDP is WebSocket only
+        // CDP is WebSocket only; the launcher's persistent browser outlives them
+        .cdp => |cdp| !cdp.persistent,
         .bidi => |bidi| bidi.mode == .bidi_only, // depends if this is BiDi-only WebDriver session
     };
 }
@@ -90,7 +91,7 @@ pub fn wakeup(self: *const Driver) void {
 // Worker thread. Note that (for bidi at least) the link can come and go
 fn link(self: *const Driver) ?*Link {
     return switch (self.impl) {
-        .cdp => |cdp| &cdp.link,
+        .cdp => |cdp| cdp.activeLink(),
         .bidi => |bidi| bidi.link,
     };
 }
@@ -115,7 +116,8 @@ pub fn onPing(self: *const Driver, body: []const u8) void {
 pub fn onLink(self: *const Driver, l: *Link) void {
     switch (self.impl) {
         .bidi => |bidi| bidi.adoptLink(l),
-        .cdp => {
+        .cdp => |cdp| {
+            if (cdp.persistent) return cdp.adoptLink(l);
             // a CDP worker is born with its link and never offered another
             log.err(self.scope, "unexpected link", .{});
             l.destroy();
@@ -169,7 +171,12 @@ pub fn onDisconnect(self: *const Driver, err: ?anyerror) bool {
     }
     log.info(self.scope, "disconnect", .{ .err = err });
     return switch (self.impl) {
-        .cdp => true,
+        .cdp => |cdp| {
+            if (!cdp.persistent) return true;
+            // JS may be on the stack (a sync wait); tick releases it
+            cdp.release_pending = true;
+            return false;
+        },
         .bidi => |bidi| bidi.onLinkGone(),
     };
 }
@@ -225,7 +232,18 @@ fn tick(self: *const Driver) !bool {
 
     // Liveness is enforced by TCP keepalive configured in
     // Server.configureSocket; the wakeup lets V8 run or terminate.
-    const wait_ms: u32 = 1000; // 1s
+    var wait_ms: u32 = 1000; // 1s
+
+    switch (self.impl) {
+        .cdp => |cdp| if (cdp.release_pending) {
+            cdp.release_pending = false;
+            cdp.releaseClient();
+        } else if (cdp.persistent) {
+            // a client that left mid-wait is released promptly
+            wait_ms = 200;
+        },
+        .bidi => {},
+    }
 
     if (self.pageWait()) |wait| {
         var runner = wait.session.runner(.{});

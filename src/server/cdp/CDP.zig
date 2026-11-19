@@ -61,6 +61,29 @@ link: Link,
 browser: Browser,
 allocator: Allocator,
 
+// SellGravity antidetect: launcher mode keeps one browser for the whole
+// process, like Chrome: it starts with the server (no socket), clients come
+// and go as adopted links, and its pages outlive them.
+persistent: bool = false,
+worker: ?*@import("../Server.zig").Worker = null,
+// whether `link` (the spawning socket's) was initialised
+embedded_link: bool = true,
+adopted_link: ?*Link = null,
+// A client on /devtools/page/<id> sends page commands without a sessionId and
+// expects events without one, as with Chrome's per-page sockets.
+implicit_session_buf: [32]u8 = undefined,
+implicit_session_id: ?[]const u8 = null,
+// internal dispatch (bindPage) must not reach the client
+suppress_events: bool = false,
+// Commands dispatched from inside another (a dialog's wait, a sync wait)
+// must not reset the outer one's arena.
+dispatch_depth: u8 = 0,
+// The client left while JS was on the stack: release at the next safe point.
+release_pending: bool = false,
+// The Input.* command being dispatched: Chrome acknowledges input before a
+// dialog it opens is closed.
+input_cmd: ?*Command = null,
+
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
@@ -126,6 +149,27 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
 }
 
+/// A persistent (launcher mode) CDP browser: no socket yet; clients attach
+/// later through adoptLink.
+pub fn initDetached(self: *CDP, app: *App, worker: *@import("../Server.zig").Worker) !void {
+    const allocator = app.allocator;
+    self.* = .{
+        .app = app,
+        .link = undefined,
+        .browser = undefined,
+        .allocator = allocator,
+        .browser_context = null,
+        .message_arena = std.heap.ArenaAllocator.init(allocator),
+        .notification_arena = std.heap.ArenaAllocator.init(allocator),
+        .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
+        .streams = .{ .allocator = allocator },
+        .persistent = true,
+        .worker = worker,
+        .embedded_link = false,
+    };
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
+}
+
 pub fn deinit(self: *CDP) void {
     if (self.browser_context) |*bc| {
         bc.deinit();
@@ -135,8 +179,125 @@ pub fn deinit(self: *CDP) void {
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
     self.streams.deinit();
-    self.link.deinit();
+    if (self.adopted_link) |l| l.destroy();
+    if (self.embedded_link) self.link.deinit();
 }
+
+/// The socket the current client speaks on, if any.
+pub fn activeLink(self: *CDP) ?*Link {
+    if (self.adopted_link) |l| return l;
+    if (self.embedded_link) return &self.link;
+    return null;
+}
+
+/// Worker thread: a client attached to the persistent browser.
+pub fn adoptLink(self: *CDP, l: *Link) void {
+    if (self.adopted_link != null) {
+        // the loop only hands one over once the previous one is released
+        l.destroy();
+        return;
+    }
+    self.adopted_link = l;
+    if (l.pageTarget()) |page| self.bindPage(page);
+    self.publishTargets();
+}
+
+/// Worker thread: the client went away. Its sessions and Target settings
+/// go with it; the browser, its context and pages stay for the next one.
+pub fn releaseClient(self: *CDP) void {
+    const l = self.adopted_link orelse return;
+    if (self.browser_context) |*bc| bc.detachAllSessions();
+    self.implicit_session_id = null;
+    self.target_auto_attach = false;
+    self.target_discover = false;
+    self.browser_session_id = null;
+    self.adopted_link = null;
+    if (self.worker) |w| w.releaseLink(); // blocks until the loop stopped reading
+    l.destroy();
+}
+
+/// Makes sure there is a page, and binds the client's socket to `wanted`
+/// (a target id from /json) when it connected to a page socket.
+pub fn bindPage(self: *CDP, wanted: ?[]const u8) void {
+    self.bindPageInner(wanted) catch |err| {
+        log.warn(.cdp, "bind page socket", .{ .err = err });
+    };
+}
+
+fn bindPageInner(self: *CDP, wanted: ?[]const u8) !void {
+    self.suppress_events = true;
+    defer self.suppress_events = false;
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    if (self.browser_context == null) _ = try self.createBrowserContext();
+    const bc = &self.browser_context.?;
+    var target: ?*Target = null;
+    if (wanted) |w| {
+        for (bc.targets.items) |t| {
+            if (t.target_id) |*tid| {
+                if (std.mem.eql(u8, tid, w)) target = t;
+            }
+        }
+    }
+    if (target == null) {
+        if (bc.targets.items.len == 0) {
+            _ = try self.internalCommand(a, "{\"id\":0,\"method\":\"Target.createTarget\",\"params\":{\"url\":\"about:blank\"}}");
+        }
+        if (bc.targets.items.len == 0) return error.NoPage;
+        target = bc.targets.items[0];
+    }
+    if (wanted == null) return;
+
+    const tid = target.?.target_id orelse return error.NoTargetId;
+    const msg = try std.fmt.allocPrint(a, "{{\"id\":0,\"method\":\"Target.attachToTarget\",\"params\":{{\"targetId\":\"{s}\",\"flatten\":true}}}}", .{&tid});
+    const out = try self.internalCommand(a, msg);
+    const parsed = std.json.parseFromSliceLeaky(struct { result: ?struct { sessionId: []const u8 } = null }, a, out, .{ .ignore_unknown_fields = true }) catch return error.AttachFailed;
+    const sid = (parsed.result orelse return error.AttachFailed).sessionId;
+    const n = @min(sid.len, self.implicit_session_buf.len);
+    @memcpy(self.implicit_session_buf[0..n], sid[0..n]);
+    self.implicit_session_id = self.implicit_session_buf[0..n];
+}
+
+// Dispatches `msg` as if a client sent it, returning the reply.
+fn internalCommand(self: *CDP, a: Allocator, msg: []const u8) ![]const u8 {
+    var w: std.Io.Writer.Allocating = .init(a);
+    try self.dispatch(a, .{ .capture = &w.writer }, msg, null);
+    return w.written();
+}
+
+/// /json for the persistent browser: its page targets, as Chrome lists them.
+pub fn publishTargets(self: *CDP) void {
+    const worker = self.worker orelse return;
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    var w: std.Io.Writer.Allocating = .init(arena.allocator());
+    self.writeTargetList(&w.writer, worker.server.cdpWsBase()) catch return;
+    worker.server.publishCdpTargets(w.written());
+}
+
+fn writeTargetList(self: *CDP, w: *std.Io.Writer, ws_base: []const u8) !void {
+    try w.writeAll("[");
+    if (self.browser_context) |*bc| {
+        var first = true;
+        for (bc.targets.items) |t| {
+            const tid = if (t.target_id) |*id| id[0..] else continue;
+            if (!first) try w.writeAll(",");
+            first = false;
+            const host = if (std.mem.startsWith(u8, ws_base, "ws://")) ws_base["ws://".len..] else ws_base;
+            try w.writeAll("{\"description\":\"\",");
+            try w.print("\"devtoolsFrontendUrl\":\"/devtools/inspector.html?ws={s}/devtools/page/{s}\",", .{ host, tid });
+            try w.print("\"id\":\"{s}\",", .{tid});
+            try w.print("\"title\":{f},", .{std.json.fmt(t.getTitle() orelse "", .{})});
+            try w.writeAll("\"type\":\"page\",");
+            try w.print("\"url\":{f},", .{std.json.fmt(t.getURL() orelse "about:blank", .{})});
+            try w.print("\"webSocketDebuggerUrl\":\"{s}/devtools/page/{s}\"}}", .{ ws_base, tid });
+        }
+    }
+    try w.writeAll("]");
+}
+
 // Called by the Server run loop when readable bytes arrive on the CDP
 // socket. Feeds them through the WS framer and pushes each parsed frame
 // into the worker's inbox. Returns false if a close frame was seen (or a
@@ -155,8 +316,20 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
         return;
     }
 
+    if (self.dispatch_depth > 0) {
+        // nested (a dialog waiting for its answer): the outer command still
+        // uses message_arena
+        var nested = std.heap.ArenaAllocator.init(self.allocator);
+        defer nested.deinit();
+        self.dispatch_depth += 1;
+        defer self.dispatch_depth -= 1;
+        return self.dispatchParsed(nested.allocator(), .{ .cdp = self }, c.raw, c.input, null);
+    }
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
+    defer if (self.persistent) self.publishTargets();
+    self.dispatch_depth += 1;
+    defer self.dispatch_depth -= 1;
     return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input, null);
 }
 
@@ -173,7 +346,8 @@ pub const SendJSONOpts = struct {
     size_hint: usize = 0,
 };
 pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
-    try self.link.sendJSON(message, .{
+    const l = self.activeLink() orelse return; // persistent browser, no client
+    try l.sendJSON(message, .{
         .size_hint = opts.size_hint,
         .stringify = .{ .emit_null_optional_fields = false },
     });
@@ -216,7 +390,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         .arena = arena,
         .sender = sender,
         .browser_context = if (self.browser_context) |*bc| bc else null,
-        .routing_session_id = input.sessionId orelse target_session_id,
+        .routing_session_id = input.sessionId orelse target_session_id orelse self.implicit_session_id,
     };
 
     // See dispatchStartupCommand for more info on this.
@@ -389,11 +563,21 @@ const SendEventOpts = struct {
     session_id: ?[]const u8 = null,
 };
 pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts) !void {
+    if (self.suppress_events) return;
     return self.sendJSON(.{
         .method = method,
         .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
-        .sessionId = opts.session_id,
+        .sessionId = self.visibleSessionId(opts.session_id),
     }, .{});
+}
+
+/// A page socket's own session is implicit: its events carry no sessionId.
+pub fn visibleSessionId(self: *const CDP, session_id: ?[]const u8) ?[]const u8 {
+    const sid = session_id orelse return null;
+    if (self.implicit_session_id) |implicit| {
+        if (std.mem.eql(u8, sid, implicit)) return null;
+    }
+    return sid;
 }
 
 pub const BrowserContext = struct {
@@ -467,6 +651,12 @@ pub const BrowserContext = struct {
     http_proxy_changed: bool = false,
     user_agent_changed: bool = false,
 
+    // SellGravity antidetect: the cookie jar is written to --cookie-jar as it
+    // changes (at most once a second, flushed on page load), not only at
+    // teardown: a launcher's force-stop kills the process.
+    cookies_dirty: bool = false,
+    cookies_saved_at: u64 = 0,
+
     download_session_id: ?[]const u8 = null,
 
     notification: *Notification,
@@ -510,6 +700,28 @@ pub const BrowserContext = struct {
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
+        if (cdp.app.config.cookieJarFile() != null) {
+            try notification.register(.cookie_changed, self, onCookieChanged);
+        }
+    }
+
+    /// Writes the cookie jar to --cookie-jar now (`force`) or when the last
+    /// write is over a second old; otherwise it stays dirty for the next one.
+    pub fn persistCookies(self: *BrowserContext, force: bool) void {
+        const path = self.cdp.app.config.cookieJarFile() orelse return;
+        const now = lp.datetime.milliTimestamp(.boot);
+        if (!force and now -| self.cookies_saved_at < 1000) {
+            self.cookies_dirty = true;
+            return;
+        }
+        lp.cookies.saveToFile(&self.session.cookie_jar, path);
+        self.cookies_saved_at = now;
+        self.cookies_dirty = false;
+    }
+
+    fn onCookieChanged(ctx: *anyopaque, _: *const Notification.CookieChanged) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        self.persistCookies(false);
     }
 
     pub fn deinit(self: *BrowserContext) void {
@@ -697,6 +909,8 @@ pub const BrowserContext = struct {
 
     fn onFrameLoaded(ctx: *anyopaque, msg: *const Notification.FrameLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        if (self.cookies_dirty) self.persistCookies(true);
+        if (self.cdp.persistent) self.cdp.publishTargets();
         const target = self.targetForFrame(msg.frame_id) orelse return;
         return @import("domains/page.zig").frameLoaded(target, msg);
     }
@@ -835,10 +1049,21 @@ pub const BrowserContext = struct {
     // This is hacky x 2. First, we create the JSON payload by gluing the
     // session_id onto it. Second, we're much more client/websocket aware than
     // we should be.
-    fn sendInspectorMessage(self: *BrowserContext, msg: []const u8, session_id: []const u8) !void {
+    fn sendInspectorMessage(self: *BrowserContext, msg: []const u8, session_id_in: []const u8) !void {
         const cdp = self.cdp;
-        const allocator = cdp.link.acquireSendArena();
-        defer cdp.link.releaseSendArena();
+        if (cdp.suppress_events) return;
+        const link = cdp.activeLink() orelse return;
+        const allocator = link.acquireSendArena();
+        defer link.releaseSendArena();
+
+        // a page socket's implicit session: the message goes as V8 wrote it
+        const session_id = cdp.visibleSessionId(session_id_in) orelse {
+            var plain: std.ArrayList(u8) = .empty;
+            plain.ensureTotalCapacityPrecise(allocator, msg.len + 10) catch return;
+            plain.appendSliceAssumeCapacity(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+            plain.appendSliceAssumeCapacity(msg);
+            return link.sendJSONRaw(plain);
+        };
 
         const field = ",\"sessionId\":\"";
 
@@ -864,7 +1089,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.link.sendJSONRaw(buf);
+        try link.sendJSONRaw(buf);
     }
 };
 
@@ -1022,6 +1247,9 @@ pub const Command = struct {
     // be code to capture the data that we were "sending".
     sender: Sender,
 
+    // a reply went out already (an Input command acknowledged early)
+    answered: bool = false,
+
     const Sender = union(enum) {
         cdp: *CDP,
         capture: *std.Io.Writer,
@@ -1073,6 +1301,8 @@ pub const Command = struct {
         size_hint: usize = 0, // hint about the final serialized size
     };
     pub fn sendResult(self: *Command, result: anytype, opts: SendResultOpts) !void {
+        if (self.answered) return;
+        self.answered = true;
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .result = if (comptime @typeInfo(@TypeOf(result)) == .null) struct {}{} else result,
@@ -1087,6 +1317,8 @@ pub const Command = struct {
 
     const SendErrorOpts = struct {};
     pub fn sendError(self: *Command, code: i32, message: []const u8, _: SendErrorOpts) !void {
+        if (self.answered) return;
+        self.answered = true;
         return self.sender.sendJSON(.{
             .id = self.input.id,
             .@"error" = .{ .code = code, .message = message },

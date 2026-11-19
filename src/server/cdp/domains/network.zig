@@ -329,6 +329,7 @@ fn deleteCookies(cmd: *CDP.Command) !void {
         .path = try Cookie.parsePath(cmd.arena, params.url, params.path),
     };
     bc.session.cookie_jar.removeWhere(&match, CookieMatch.matches);
+    bc.persistCookies(true);
     return cmd.sendResult(null, .{});
 }
 
@@ -356,6 +357,7 @@ fn clearBrowserCookies(cmd: *CDP.Command) !void {
     // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
+    bc.persistCookies(true);
     return cmd.sendResult(null, .{});
 }
 

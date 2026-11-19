@@ -1007,12 +1007,33 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
     // Lightpanda-aware clients that want to control confirm/prompt return
     // values can pre-arm a response via LP.handleJavaScriptDialog instead
     // (see src/cdp/domains/lp.zig).
-    _ = try cmd.params(struct {
+    const params = try cmd.params(struct {
         accept: bool,
         promptText: ?[]const u8 = null,
     });
+    if (lp.Persona.active) persona: {
+        const p = params orelse break :persona;
+        const target = cmd.target() catch break :persona;
+        if (target.dialog_waiting) {
+            const prompt_text: ?[]const u8 = if (p.promptText) |t| try target.arena.allocator().dupe(u8, t) else null;
+            target.dialog_answer = .{ .accept = p.accept, .prompt_text = prompt_text };
+            return cmd.sendResult(null, .{});
+        }
+        if (target.dialog_lingering) {
+            target.dialog_lingering = false;
+            try cmd.sendResult(null, .{});
+            if (target.session_id) |sid| {
+                try cmd.cdp.sendEvent("Page.javascriptDialogClosed", .{ .result = p.accept, .userInput = p.promptText orelse "" }, .{ .session_id = sid });
+            }
+            return;
+        }
+    }
     return cmd.sendError(-32000, "No dialog is showing", .{});
 }
+
+// How long a dialog holds its script for the client's answer. Chrome holds
+// it until someone answers; headless, nobody may, so it gives up eventually.
+const dialog_wait_ms = 10_000;
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-javascriptDialogOpening
 pub fn javascriptDialogOpening(target: *CDP.Target, event: *const Notification.JavascriptDialogOpening) !void {
@@ -1020,9 +1041,11 @@ pub fn javascriptDialogOpening(target: *CDP.Target, event: *const Notification.J
     // dispatch's output param so the calling alert/confirm/prompt returns
     // the CDP client's choice. Cleared unconditionally — a stash applies
     // to exactly one dialog.
+    var pre_armed = false;
     if (target.pending_dialog_response) |pending| {
         event.response.* = pending;
         target.pending_dialog_response = null;
+        pre_armed = true;
     }
 
     const session_id = target.session_id orelse return;
@@ -1034,6 +1057,37 @@ pub fn javascriptDialogOpening(target: *CDP.Target, event: *const Notification.J
         .type = event.dialog_type,
         .hasBrowserHandler = false,
         .defaultPrompt = "",
+    }, .{ .session_id = session_id });
+
+    if (pre_armed or !lp.Persona.active or target.dialog_waiting) return;
+    if (cdp.activeLink() == null) return;
+
+    // Chrome: the input that opened the dialog is acknowledged right away;
+    // the script stays blocked until the client answers.
+    if (cdp.input_cmd) |input_cmd| input_cmd.sendResult(null, .{}) catch {};
+
+    target.dialog_lingering = false;
+    target.dialog_answer = null;
+    target.dialog_waiting = true;
+    defer target.dialog_waiting = false;
+
+    const client = &cdp.browser.http_client;
+    const deadline = lp.datetime.milliTimestamp(.boot) + dialog_wait_ms;
+    while (target.dialog_answer == null) {
+        if (cdp.release_pending or cdp.activeLink() == null) break;
+        if (lp.datetime.milliTimestamp(.boot) >= deadline) break;
+        client.tickSync(50) catch break;
+    }
+
+    const answer = target.dialog_answer orelse {
+        target.dialog_lingering = true;
+        return;
+    };
+    target.dialog_answer = null;
+    event.response.* = answer;
+    try cdp.sendEvent("Page.javascriptDialogClosed", .{
+        .result = answer.accept,
+        .userInput = answer.prompt_text orelse "",
     }, .{ .session_id = session_id });
 }
 

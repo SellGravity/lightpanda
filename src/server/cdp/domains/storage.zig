@@ -62,6 +62,7 @@ fn clearCookies(cmd: *CDP.Command) !void {
     }
 
     bc.session.cookie_jar.clearRetainingCapacity();
+    bc.persistCookies(true);
 
     return cmd.sendResult(null, .{});
 }

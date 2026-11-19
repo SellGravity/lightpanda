@@ -619,6 +619,9 @@ fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Serv
         }
         return serveSessionCommand(server, conn, req, tail);
     }
+    if (std.mem.startsWith(u8, path, "/devtools/") and req.method == .GET and server.protocols.cdp) {
+        return upgradeDevtools(server, conn, req, path);
+    }
     return dispatch(server, &routes, conn, req, path);
 }
 
@@ -754,6 +757,19 @@ fn gateOpen(server: *const Server, gate: Route.Gate) bool {
 
 // GET / (cdp)
 fn upgradeCDP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    if (server.persistent_cdp != null) return upgrade(server, conn, req, .{ .persistent = "" });
+    return upgradeSpawn(server, conn, req, .cdp);
+}
+
+// GET /devtools/browser/<id> and /devtools/page/<id> (cdp): Chrome's socket
+// paths. The persistent browser answers both; a page socket is bound to its
+// page.
+fn upgradeDevtools(server: *Server, conn: *Connection, req: *Connection.Request, path: []const u8) !Served {
+    const page_prefix = "/devtools/page/";
+    if (server.persistent_cdp != null) {
+        const page = if (std.mem.startsWith(u8, path, page_prefix)) path[page_prefix.len..] else "";
+        return upgrade(server, conn, req, .{ .persistent = page });
+    }
     return upgradeSpawn(server, conn, req, .cdp);
 }
 
@@ -764,6 +780,11 @@ fn serveJSONVersion(server: *Server, conn: *Connection, req: *Connection.Request
 
 // GET /json/list or GET /json (cdp)
 fn serveJSONList(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    if (server.persistent_cdp != null) {
+        const writer = try beginBody(server);
+        try server.cdpTargetsJson(writer);
+        return serveDynamicHTTPResponse(server, conn, req, .ok, JSON_CONTENT_TYPE);
+    }
     return serveHTTPResponse(server, conn, req, .{ .static = empty_json_list_response });
 }
 
@@ -1154,6 +1175,8 @@ pub fn buildJSONVersionResponse(app: *const App, ws_url: []const u8) ![]const u8
 const Upgrade = union(enum) {
     spawn: Driver.Protocol,
     attach: *Server.Worker,
+    // launcher mode's process-wide browser; the page id of a page socket
+    persistent: []const u8,
 };
 
 // Shared upgrade path: validate the WebSocket headers, write the 101, and
@@ -1185,6 +1208,7 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     switch (target) {
         .spawn => |protocol| server.upgradeConnection(conn, protocol),
         .attach => |worker| server.attachConnection(worker, conn),
+        .persistent => |page| server.attachPersistentCdp(conn, page),
     }
     return .upgraded;
 }
