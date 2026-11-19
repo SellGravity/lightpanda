@@ -46,12 +46,48 @@ fn trampoline(raw: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
         argv[i] = v8.v8__FunctionCallbackInfo__INDEX(info, @intCast(i)).?;
     }
     const recv: *const v8.Value = @ptrCast(v8.v8__FunctionCallbackInfo__This(info).?);
-    // A throw inside impl stays pending on the isolate and propagates to the
-    // caller, like a builtin throwing.
-    const result = v8.v8__Function__Call(impl, context, recv, @intCast(n), @ptrCast(&argv)) orelse return;
+    // A throw inside impl propagates to the caller like a builtin's. An Error
+    // made by impl would carry impl's own frames in its stack (the bootstrap
+    // showing through); it is thrown again as a fresh error of the same type
+    // and message, made here, whose stack starts at the caller.
+    var replacement: ?*const v8.Value = null;
+    const result = blk: {
+        var tc: v8.TryCatch = undefined;
+        v8.v8__TryCatch__CONSTRUCT(&tc, isolate);
+        defer v8.v8__TryCatch__DESTRUCT(&tc);
+        if (v8.v8__Function__Call(impl, context, recv, @intCast(n), @ptrCast(&argv))) |r| break :blk r;
+        if (!v8.v8__TryCatch__HasCaught(&tc)) return;
+        const exception = v8.v8__TryCatch__Exception(&tc) orelse return;
+        replacement = freshError(isolate, context, exception);
+        if (replacement == null) _ = v8.v8__TryCatch__ReThrow(&tc);
+        break :blk null;
+    } orelse {
+        if (replacement) |e| _ = v8.v8__Isolate__ThrowException(isolate, e);
+        return;
+    };
     var rv: v8.ReturnValue = undefined;
     v8.v8__FunctionCallbackInfo__GetReturnValue(info, &rv);
     v8.v8__ReturnValue__Set(rv, result);
+}
+
+/// The same error as `exception`, created from native code, or null when it
+/// isn't a plain Error / TypeError / RangeError / SyntaxError / ReferenceError.
+fn freshError(isolate: *v8.Isolate, context: *const v8.Context, exception: *const v8.Value) ?*const v8.Value {
+    if (!v8.v8__Value__IsNativeError(exception)) return null;
+    const object: *const v8.Object = @ptrCast(exception);
+    const key = v8.v8__String__NewFromUtf8(isolate, "message", v8.kNormal, 7) orelse return null;
+    const message_value = v8.v8__Object__Get(object, context, @ptrCast(key)) orelse return null;
+    const message = v8.v8__Value__ToString(message_value, context) orelse return null;
+    const ctor = v8.v8__Object__GetConstructorName(object) orelse return null;
+    var buf: [16]u8 = undefined;
+    const len = v8.v8__String__WriteUtf8(ctor, isolate, &buf, buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+    const name = buf[0..@min(len, buf.len)];
+    if (std.mem.eql(u8, name, "TypeError")) return v8.v8__Exception__TypeError(message);
+    if (std.mem.eql(u8, name, "RangeError")) return v8.v8__Exception__RangeError(message);
+    if (std.mem.eql(u8, name, "SyntaxError")) return v8.v8__Exception__SyntaxError(message);
+    if (std.mem.eql(u8, name, "ReferenceError")) return v8.v8__Exception__ReferenceError(message);
+    if (std.mem.eql(u8, name, "Error")) return v8.v8__Exception__Error(message);
+    return null;
 }
 
 /// Body of interface stubs: `new X()` and `X()` both throw, as Chrome's
@@ -173,6 +209,22 @@ pub fn installLegacyMath(local: *const js.Local) void {
     }
 }
 
+/// Keeps the pristine Error.captureStackTrace on the context (see
+/// Context.persona_capture_stack).
+fn rememberCaptureStackTrace(local: *const js.Local) void {
+    const isolate = local.isolate.handle;
+    const context = local.handle;
+    const global = v8.v8__Context__Global(context) orelse return;
+    const error_key = v8.v8__String__NewFromUtf8(isolate, "Error", v8.kNormal, 5) orelse return;
+    const error_ctor = v8.v8__Object__Get(global, context, @ptrCast(error_key)) orelse return;
+    if (!v8.v8__Value__IsObject(error_ctor)) return;
+    const key = v8.v8__String__NewFromUtf8(isolate, "captureStackTrace", v8.kNormal, 17) orelse return;
+    const capture = v8.v8__Object__Get(@ptrCast(error_ctor), context, @ptrCast(key)) orelse return;
+    if (!v8.v8__Value__IsFunction(capture)) return;
+    const func: js.Function = .{ .local = local, .handle = @ptrCast(capture) };
+    local.ctx.persona_capture_stack = func.persist() catch null;
+}
+
 /// The maker as a JS function value, to pass to the bootstrap.
 pub fn makerFunction(local: *const js.Local) ?js.Function {
     const handle = v8.v8__Function__New__DEFAULT(local.handle, maker) orelse return null;
@@ -193,4 +245,5 @@ pub fn runPersonaBootstrap(local: *const js.Local, source: []const u8, timezone:
     var argv = [_]*const v8.Value{ @ptrCast(make.handle), persona.handle };
     const recv: *const v8.Value = @ptrCast(v8.v8__Context__Global(local.handle).?);
     _ = v8.v8__Function__Call(bootstrap, local.handle, recv, 2, @ptrCast(&argv)) orelse return error.BootstrapThrew;
+    rememberCaptureStackTrace(local);
 }

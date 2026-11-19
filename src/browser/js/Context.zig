@@ -135,6 +135,9 @@ scheduler: Scheduler,
 // handler attached before the checkpoint ends withdraws the promise: it was
 // never unhandled. What is left is reported by Env.runMicrotasks.
 rejected_promises: std.ArrayList(js.Promise.Global) = .empty,
+// SellGravity antidetect: the context's own Error.captureStackTrace, taken
+// before any page script runs, to give native DOMExceptions a stack.
+persona_capture_stack: ?js.Function.Global = null,
 
 // Execution context for worker-compatible APIs. This provides a common
 // interface that works in both Page and Worker contexts.

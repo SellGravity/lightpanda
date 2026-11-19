@@ -9,7 +9,9 @@ InviPanda là một engine **headless, nhẹ** (mỗi profile ~20–120 MB RAM) 
 | Hạng mục | Kết quả |
 |---|---|
 | Test upstream (`make test`, chạy trên FS Linux) | **2427/2427** qua |
-| **deviceandbrowserinfo** `/are_you_a_bot` (2026-11-19) | **`isBot: false`**: hết `isAutomatedWithCDP` (cả worker), hết `hasInconsistentTimingResolution` |
+| **deviceandbrowserinfo** `/are_you_a_bot` (2026-11-19, bản release, có `Runtime.enable`) | **`isBot: false`**: hết `isAutomatedWithCDP` (cả worker), hết `hasInconsistentTimingResolution` |
+| **fingerprint-scan.com** bot score | 100 → **77** (Browser HIGH+80 → MEDIUM+15). Phần còn lại: Network/proxy +44, Hardware +18 |
+| CreepJS (bản cuối) | like-headless **31%** (bằng Chrome desktop thật), headless 0%, stealth 0% |
 | **fingerprint-scan.com** (2026-11-19) | CDP check / CDP stack check / worker / iframe đều `false`; WebGPU, Widevine, mediaCapabilities, Summarizer, keyboard map, audio extended, scrollbar 15px, WebGL2 params khớp Chrome thật |
 | **BrowserScan** | **100%**, Bot Detection: không phát hiện. Server trả `isBrowserCorrect=1`, kernel `windowVersion 139-140`, `liedWindow=false` |
 | **pixelscan** `/fingerprint-check` | **"Your Browser Fingerprint is consistent"**, No masking / No proxy / No automated behavior. Nhận đúng "Chrome 140 on Windows", font Windows 55/55 (`osFontsStatus: true`), hash hộp đỏ WebGL trùng Chrome |
@@ -74,7 +76,10 @@ Switch được hỗ trợ:
 | Canvas / font | Nhiễu chỉ trên pixel khử răng cưa (vùng tô đặc và đường biên giữa chúng giữ nguyên). Mỗi font có độ lệch baseline dưới-pixel riêng nên các font khác nhau ra hình khác nhau | raster.zig, fonts.zig |
 | iframe | `src="javascript:…"` chạy script trong about:blank cùng origin (pixelscan dùng để so sánh vân tay) | Frame.zig |
 | CDP không lộ | Khi automation bật `Runtime.enable`, serialize console/exception **không bao giờ chạy getter của trang** (`stack`, `message`, `name`, Proxy, `Error.prepareStackTrace`): mẹo "Error có getter stack + console.debug" không còn bắt được CDP | cdp/domains/runtime.zig, js/Value.zig, js/TryCatch.zig |
-| Đồng hồ | `performance.now()`, `event.timeStamp`, PerformanceEntry làm tròn 100µs kèm jitter như TimeClamper của Chrome; `timeOrigin` 100µs | Performance.zig, Event.zig |
+| Đồng hồ | `performance.now()`, `event.timeStamp`, PerformanceEntry làm tròn 100µs kèm jitter như TimeClamper của Chrome, và mang đúng phần dư số thực của Chrome (1038.2999999970198); rAF chạy theo vsync 60 Hz với timestamp khung hình; `document.timeline.currentTime` | Performance.zig, Event.zig, Timers.zig |
+| Runtime.enable | Automation bật `Runtime` không còn làm mọi exception chậm đi nhiều lần (V8 không dò catcher trên từng lần throw nữa): pages đo thời gian throw để nhận ra Puppeteer/Playwright | cdp/domains/runtime.zig |
+| Lỗi native | Lỗi ném ra từ hàm giả lập không lộ frame của bootstrap trong `stack`; DOMException native có `stack` như Chrome | js/native_shim.zig, js/Caller.zig |
+| Thứ tự window | `Object.keys(window)` / `getOwnPropertyNames(window)` đúng thứ tự Chrome 157 cho mọi tên chung; window/document/location/top/chrome không configurable | persona_bootstrap.js |
 | Prototype parity | **4.938 member** của Chrome (method, getter/setter, hằng số, `length`) bổ sung cho mọi interface, **lọc theo phiên bản Chrome của persona** (dữ liệu MDN browser-compat-data). Gọi trên prototype → "Illegal invocation"; thiếu tham số → thông báo "Failed to execute … N argument(s) required" của Chrome; giá trị trả về đúng kiểu WebIDL (Promise, đối tượng interface, boolean…, lấy từ IDL spec @webref/idl) | persona_bootstrap.js `parity()`, persona_parity.txt |
 | API sâu | WebGL2 có prototype riêng (không kế thừa WebGL1, như Chrome), **mọi object extension** + hằng số, tham số WebGL2; WebGPU (adapter, features/limits theo phiên bản, `info.vendor/architecture` suy từ GPU persona); EME **Widevine** (`requestMediaKeySystemAccess`), `mediaCapabilities.decodingInfo/encodingInfo`; Summarizer/Translator/LanguageDetector; `navigator.keyboard.getLayoutMap()` (48 phím); Trusted Types thật (createPolicy/createHTML…) | persona_bootstrap.js `deepApis()` |
 | AnalyserNode | Node thật: cửa sổ Blackman + FFT + smoothing + dB như RealtimeAnalyser của Chrome (`reduction`, tổng time-domain khớp Chrome tới chữ số thứ 7) | webaudio/AnalyserNode.zig |

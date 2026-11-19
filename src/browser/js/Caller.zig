@@ -594,6 +594,17 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         };
     };
 
+    // SellGravity antidetect: Chrome's DOMExceptions carry a stack, like any
+    // Error; Lightpanda's are plain objects.
+    if (lp.Persona.active and DOMExceptionMod.fromError(err) != null) {
+        if (err_local.ctx.persona_capture_stack) |capture| {
+            const func = capture.local(&err_local);
+            var argv = [_]*const v8.Value{js_err};
+            const recv: *const v8.Value = @ptrCast(v8.v8__Context__Global(err_local.handle).?);
+            _ = v8.v8__Function__Call(func.handle, err_local.handle, recv, 1, @ptrCast(&argv));
+        }
+    }
+
     if (comptime returnsPromise(F) and @TypeOf(info) == FunctionCallbackInfo) {
         rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info);
         return;
@@ -622,6 +633,8 @@ fn returnsPromise(comptime F: type) bool {
 }
 
 // Convert a Zig error to a DOMException. If the error is unknown, return null.
+const DOMExceptionMod = @import("../webapi/DOMException.zig");
+
 fn domExceptionToJs(local: *const Local, err: anyerror) ?*const v8.Value {
     const DOMException = @import("../webapi/DOMException.zig");
     const ex = DOMException.fromError(err) orelse return null;
