@@ -125,6 +125,17 @@ Phía engine, để khớp đúng cách `cdp.service.ts` và API ngoài dùng CD
 - **Cookie lưu theo profile**: `<user-data-dir>/InviPanda/Cookies.json` được nạp khi khởi động và ghi lại khi cookie đổi (tối đa 1 lần/giây; ghi ngay khi xoá cookie hoặc khi trang tải xong). Seed cookie của launcher, vốn chỉ áp một lần, vẫn còn sau khi khởi động lại.
 - **Dialog chặn script như Chrome**: `alert`/`confirm`/`prompt` chờ `Page.handleJavaScriptDialog`. Lệnh `Input.*` mở dialog được trả lời ngay, nên node "click" rồi node "accept alert" chạy đúng như trên Chrome. Nếu không ai trả lời trong 10 giây, dialog bị đóng cho script, và một `handleJavaScriptDialog` đến muộn vẫn thành công.
 - `Emulation.setPageScaleFactor` có hỗ trợ.
+- **Khớp thông số với Gravity Chromium.** Harness `match.mjs` gọi đúng `chromium-flags.builder.ts` của InviBrowser cho 4 profile mẫu (Windows 10, Windows 11, Android, iOS), chạy cùng bộ flag trên Gravity Chromium thật và trên InviPanda, rồi so từng giá trị JS và header. Kết quả: **0 lệch**. Các điểm đã sửa cho khớp:
+  - UA giữ nguyên bản đầy đủ. Windows `platformVersion` = 10.0.0. `deviceMemory` lấy đúng giá trị của profile.
+  - Số thiết bị media đúng thứ tự `audioinput,audiooutput,videoinput` và đúng số lượng.
+  - WebRTC ở chế độ disable/forward không có candidate nào.
+  - `Accept` có `image/jxl`. `Accept-Language` và `navigator.languages` kết thúc bằng `en-US,en`. Intl dùng locale ứng dụng của Chrome (vi-VN → vi).
+  - Chế độ điện thoại: DPR 3, trang chiếm toàn màn hình thiết bị, có `ontouch*`, và khung nhìn 980px khi trang không có `<meta name=viewport>` (kèm `visualViewport.scale`).
+  - Android: client hint `model` lấy từ UA. iOS: vendor Apple, không có `userAgentData`, không gửi client hint.
+  - `Accept-CH` được nhớ theo origin, sau đó gửi các high-entropy hint đúng thứ tự của Chrome (cả điều hướng lẫn fetch).
+  - HTTP/1.1: `Connection` đứng ngay sau `Host` (đã vendor `http.c` của curl).
+  - Những chỗ Gravity tự sai thì **không bắt chước**: lộ ngôn ngữ của máy host, chèn "Mobile Safari" vào UA iOS, điện thoại có 5 plugin PDF, hướng màn hình ngang, `sec-ch-ua` rỗng trên iOS, đổi kích thước màn hình khi xếp ô cửa sổ.
+- **macOS và Linux**: workflow `.github/workflows/invipanda.yml` build runtime native cho macOS (arm64, x86_64) và Linux (x86_64, aarch64), kèm smoke test chế độ launcher. Tag `invipanda-v*` phát hành bộ file tải về `invipanda-<os>-<arch>.tar.gz` kèm `.sha256`. Launcher tự cài runtime ở lần chạy đầu tiên: macOS/Linux vào `<userData>/invipanda`, Windows vào `/opt/invipanda` trong WSL.
 - **Vị trí theo IP** (`--location-mode=<perm>,ip`, mặc định của InviBrowser): giống Gravity Chromium, lúc khởi động InviPanda tra toạ độ của IP đi ra **qua proxy của profile** (thử lần lượt ip-api.com, ipwho.is, ipinfo.io), trên một thread riêng, rồi trả độ chính xác cỡ thành phố (khoảng 1,5 km). Ở chế độ `ask`, `getCurrentPosition` chờ mãi như một prompt chưa ai trả lời, thay vì bị từ chối ngay (từ chối ngay trong khi quyền vẫn là "prompt" là dấu hiệu headless).
 - Kiểm chứng bằng harness `invi-compat.mjs`: launch giống hệt gravbrowser, gọi hơn 55 method CDP mà app dùng, kiểm tra reconnect, takeover, switchToTarget và cookie sau khi khởi động lại. Kết quả **64/64**.
 
