@@ -93,7 +93,7 @@ Switch được hỗ trợ:
 2. **Layout xấp xỉ**: không có engine layout thật; vị trí, kích thước phần tử là ước lượng.
 3. **WebRTC chỉ là bề mặt**: ICE gathering chạy đúng trình tự Chrome nhưng chỉ có candidate host mDNS (không srflx vì không có STUN thật), không có media thật.
 8. **Cloudflare managed challenge / Turnstile chưa qua**: VM bytecode của Turnstile vẫn rơi vào nhánh lỗi (code 300010) ngay sau bước dò WebRTC. Đã sửa các khác biệt nó phát hiện (Trusted Types, ICE event, chuỗi prototype immutable, giá trị trả về đúng kiểu); phần còn lại cần dịch ngược VM.
-9. **CSP chưa được thực thi**: script inline không có nonce vẫn chạy (Chrome chặn). Trang có thể dùng việc này để phân biệt.
+9. CSP mới thực thi cho script inline (nonce, hash, `'unsafe-inline'`, header + meta). Script ngoài, `eval` và event handler inline chưa bị kiểm tra theo CSP.
 4. **Không có bản Windows native**: chạy qua WSL2 (hoặc Docker).
 5. **WebGL chỉ vẽ được hình màu phẳng**: đủ cho các bài kiểm tra kiểu "hộp đỏ"; shader phức tạp (gradient, texture) thì không ra pixel.
 6. BrowserScan có bảng phiên bản CSS riêng (server) đọc ra `cssVersion 133-134` cho persona 140 (lệch 6). Không bị trừ điểm (chỉ tính khi CSS, JS và window cùng lệch), nhưng chưa khớp hẳn.

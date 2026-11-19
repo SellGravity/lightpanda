@@ -927,6 +927,15 @@ pub const Script = struct {
             return;
         }
 
+        // SellGravity antidetect: an inline script the document's CSP doesn't
+        // allow is refused, as in Chrome.
+        if (lp.Persona.active and self.source == .@"inline") {
+            if (!@import("frame/csp.zig").allowsInlineScript(frame, fe.script_element.asElement(), self.source.content())) {
+                log.warn(.browser, "CSP refused inline script", .{ .url = self.url });
+                return;
+            }
+        }
+
         const document = frame.document;
         const previous_script = document._current_script;
         const previous_is_module = document._current_script_is_module;

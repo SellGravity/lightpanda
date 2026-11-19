@@ -78,6 +78,7 @@ const Download = @import("Download.zig");
 const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const framing = @import("frame/framing.zig");
+const csp = @import("frame/csp.zig");
 pub const parse = @import("frame/parse.zig");
 pub const change = @import("frame/change.zig");
 pub const preload = @import("frame/preload.zig");
@@ -265,6 +266,9 @@ url: [:0]const u8 = "about:blank",
 _requested_url: [:0]const u8 = "about:blank",
 
 origin: ?[]const u8 = null,
+// SellGravity antidetect: the document's Content-Security-Policy header(s),
+// comma-joined, for inline script checks (frame/csp.zig). Persona only.
+_csp_header: ?[]const u8 = null,
 
 // The base url specifies the base URL used to resolve the relative urls.
 // It is set by a <base> tag.
@@ -1873,6 +1877,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
         return error.XFrameOptionsDenied;
     }
     try self.js.setOrigin(self.origin);
+    self._csp_header = if (lp.Persona.active) try cspHeader(self.page_arena, transfer) else null;
 
     // After any redirect, drop the original method/body/header so a later
     // Page.reload doesn't re-POST form data to the redirect target. Conservative
@@ -4848,4 +4853,20 @@ test "Frame: iframeAddedCallback does not create a frame when termination is pen
     try frame.iframeAddedCallback(iframe);
     try testing.expectEqual(contexts_before, env.contexts.items.len);
     try testing.expectEqual(false, iframe._executed);
+}
+
+// Every Content-Security-Policy header of the response, comma-joined (one
+// policy per header); null without one.
+fn cspHeader(arena: std.mem.Allocator, transfer: *HttpClient.Transfer) !?[]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (transfer.responseHeaders()) |hdr| {
+        if (!std.ascii.eqlIgnoreCase(hdr.name, "content-security-policy")) continue;
+        if (out.items.len > 0) try out.append(arena, ',');
+        try out.appendSlice(arena, hdr.value);
+    }
+    return if (out.items.len > 0) out.items else null;
+}
+
+test {
+    _ = csp;
 }
